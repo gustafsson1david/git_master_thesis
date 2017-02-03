@@ -2,14 +2,15 @@ import tkinter
 from PIL import Image, ImageTk
 
 
-def show_top_5(file_names, captions, height=285):
+def show_top_5(file_names, captions, height=285,
+    title="Top 5 results from comparing captions"):
     """
     Takes in file names and captions of 6 images, 1 query and 5 results, and
     creates a Tkinter ui window which displays them.
     """
     # Create window
     Tk = tkinter.Tk()
-    Tk.title("Top 5 results from comparing captions")
+    Tk.title(title)
     Tk.configure(background='white')
     Tk.wm_geometry("%dx%d%+d%+d" % (1250, 700, 0, 0))
 
