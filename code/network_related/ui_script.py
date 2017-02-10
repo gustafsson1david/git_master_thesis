@@ -47,4 +47,6 @@ def show_top_5(file_names, captions, height=285,
                 row=(2*(int(i/3)+1)-1),column=int((i%3)+1),sticky='nw')
 
     # Load window
+    Tk.lift()
+    print('Done')
     Tk.mainloop()
