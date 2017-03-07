@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image, ImageTk
 import scipy
 import random
+from scipy.spatial.distance import cosine
 
 
 class demo():
@@ -61,6 +62,13 @@ class demo():
                 label.image = image
                 label.place(relx=0.5, y=query_size + 15, anchor=tkinter.CENTER)
                 self.labels.append(label)
+
+                # Add reset button
+                button = tkinter.Button(
+                    self.root, text="Reset", command=self.reset_image
+                )
+                button.place(relx=0.9, rely=0.1)
+                self.labels.append(button)
             else:
                 # Resize to y x 100
                 [image_width, image_height] = image.size
@@ -105,7 +113,7 @@ class demo():
             if file_name != query_file_name:
                 w2v = self.w2v_dic[file_name]
                 # Iterate over all captions belonging to an image
-                distance = scipy.spatial.distance.cosine(query_w2v, w2v)
+                distance = cosine(query_w2v, w2v)
 
                 # See if closest caption is in top 5
                 for i, closest_dis in enumerate(top5_distances):
@@ -126,7 +134,7 @@ class demo():
             closest_dis = 1.0
             for word in self.explanatory_dic.keys():
                 word_w2v = self.explanatory_dic[word]
-                distance = scipy.spatial.distance.cosine(agg_w2v, word_w2v)
+                distance = cosine(agg_w2v, word_w2v)
                 if distance < closest_dis:
                     closest_dis = distance
                     top_word = word
@@ -135,6 +143,14 @@ class demo():
 
     def change_image(self, event):
         file_name = self.images[int(str(event.widget)[1:])]
+        for label in self.labels:
+            label.destroy()
+        self.labels = []
+        self.images = []
+        self.build_window(file_name)
+
+    def reset_image(self):
+        file_name = self.random_image()
         for label in self.labels:
             label.destroy()
         self.labels = []

@@ -1,5 +1,6 @@
 import tkinter
 from PIL import Image, ImageTk
+from scipy.spatial.distance import cosine
 
 
 def show_top_5(file_names, captions, height=285,
