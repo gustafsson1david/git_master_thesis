@@ -1,7 +1,6 @@
 import tkinter
 import numpy as np
 from PIL import Image, ImageTk
-import scipy
 import random
 from scipy.spatial.distance import cosine
 
@@ -118,8 +117,10 @@ class demo():
                 # See if closest caption is in top 5
                 for i, closest_dis in enumerate(top5_distances):
                     if distance < closest_dis:
-                        top5_distances[i] = distance
-                        top5_file_names[i] = file_name
+                        top5_distances[i:i] = [distance]
+                        top5_file_names[i:i] = [file_name]
+                        del top5_distances[-1]
+                        del top5_file_names[-1]
                         break
         return top5_file_names
 
