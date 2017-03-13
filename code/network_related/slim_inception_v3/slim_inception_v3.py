@@ -9,7 +9,7 @@ from tensorflow.contrib.slim.python.slim.nets.inception_v3 import inception_v3
 from tensorflow.contrib.slim.python.slim.nets.inception_v3 import inception_v3_arg_scope
 
 
-class slim_inception_v3(object):
+class SlimInceptionV3(object):
 
     def __init__(self):
         self.timestamp = time.strftime('%Y%m%d-%H%M', time.localtime())
@@ -21,7 +21,7 @@ class slim_inception_v3(object):
         self.cost_summary = []
 
     # 'InceptionV3/InceptionV3/Mixed_7b/Branch_3/AvgPool_0a_3x3/AvgPool:0'
-    def build_graph(self, branch_path='InceptionV3/Logits/Dropout_1b/Identity:0', own_layers=1, layers_to_train=[]):
+    def build_graph(self, branch_path='InceptionV3/Logits/Dropout_1b/Identity:0', layers_to_train=[], own_layers=1):
 
         # Define preprocessing
         with tf.name_scope('Preprocessing'):
@@ -32,7 +32,7 @@ class slim_inception_v3(object):
 
         # Load Inception-v3 graph from slim
         with slim.arg_scope(inception_v3_arg_scope()):
-            logits, end_points = inception_v3(normalized_im, num_classes=1001, is_training=False)
+            inception_v3(normalized_im, num_classes=1001, is_training=False)
         self.slim_variables = [v for v in tf.global_variables() if v.name.startswith('InceptionV3/')]
 
         # Create own branch
@@ -80,7 +80,7 @@ class slim_inception_v3(object):
         # TODO: Take care of case when there already exist a saved graph
         tf.summary.FileWriter('./runs/' + self.timestamp + '/graph/', graph=self.graph)
 
-    def train(self, learning_rate=1e-5, momentum=0.9, batch_size=5, val_freq=50, val_size=10):
+    def train(self, batch_size=1, epochs=1, learning_rate=1e-5, momentum=0.9, val_freq=100, val_size=10):
         # Define training
         self.graph.as_default()
         with tf.name_scope('Optimization'):
@@ -101,14 +101,12 @@ class slim_inception_v3(object):
         # Caption dictionaries
         train_dict = np.load('../../../data/word2vec_train.npy').item()
         val_dict = np.load('../../../data/word2vec_val.npy').item()
-        # Labels
-        labels = open('../../../data/ilsvrc2012_labels.txt', 'r').readlines()
+        # # Labels
+        # labels = open('../../../data/ilsvrc2012_labels.txt', 'r').readlines()
 
         # Initialize variables
         saver = tf.train.Saver(var_list=self.slim_variables)
         saver.restore(self.sess, "../../../data/inception-2016-08-28/inception_v3.ckpt")
-        # self.sess.run([w1.initializer, b1.initializer, w2.initializer, b2.initializer])
-        # self.sess.run([global_step.initializer])
         uninitialized = self.sess.run(tf.report_uninitialized_variables())
         uninitialized = [str(v)[2:-1] + ':0' for v in uninitialized]
         uninitialized = [v for v in tf.global_variables() if v.name in uninitialized]
@@ -124,59 +122,63 @@ class slim_inception_v3(object):
         y = self.graph.get_tensor_by_name('Own/y:0')
 
         # Train
-        for i in range(len(train_image_list))[::batch_size]:
+        for e in range(epochs):
             try:
-                image_batch = []
-                caption_batch = []
-                # Form batch and feed through
-                for j in range(batch_size):
-                    try:
-                        temp_im = np.array(Image.open(train_image_path + train_image_list[i + j]))
-                        # If image has only one channel
-                        if len(np.shape(temp_im)) == 2:
-                            temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
-                        # Resize image
-                        resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
-                        # resized_temp_im = sess.run(g.get_tensor_by_name('Preprocessing/Sub:0'),{input_im:[temp_im]})
-                        image_batch.append(resized_temp_im[0])
+                print('Epoch {}'.format(e+1))
+                if e > 0:
+                    random.shuffle(train_image_list)
 
-                        # Choose one of the five captions randomly
-                        r = random.randrange(len(train_dict[train_image_list[i + j]]))
-                        caption_batch.append(train_dict[train_image_list[i + j]][r])
-                    except IndexError:
-                        pass
+                for i in range(len(train_image_list))[::batch_size]:
+                    image_batch = []
+                    caption_batch = []
+                    # Form batch and feed through
+                    for j in range(batch_size):
+                        try:
+                            temp_im = np.array(Image.open(train_image_path + train_image_list[i + j]))
+                            # If image has only one channel
+                            if len(np.shape(temp_im)) == 2:
+                                temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
+                            # Resize image
+                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
+                            image_batch.append(resized_temp_im[0])
 
-                caption_batch = np.stack(caption_batch, axis=0)
-                image_batch = np.stack(image_batch, axis=0)
-                [batch_cost, _] = self.sess.run([self.cost_summary, train_step], feed_dict={normalized_im: image_batch, y: caption_batch})
-                train_writer.add_summary(batch_cost, i)
-                print(i, end=' ', flush=True)
+                            # Choose one of the five captions randomly
+                            r = random.randrange(len(train_dict[train_image_list[i + j]]))
+                            caption_batch.append(train_dict[train_image_list[i + j]][r])
+                        except IndexError:
+                            pass
 
-                # # Get prediction
-                # class_pred = np.argmax(sess.run(g.get_tensor_by_name('InceptionV3/Predictions/Softmax:0'),{input_im:image}))
-                # print(labels[class_pred])
+                    caption_batch = np.stack(caption_batch, axis=0)
+                    image_batch = np.stack(image_batch, axis=0)
+                    [batch_cost, _] = self.sess.run([self.cost_summary, train_step], feed_dict={normalized_im: image_batch, y: caption_batch})
+                    train_writer.add_summary(batch_cost, e*len(train_image_list)+i)
 
-                # Evaluate every val_freq:th step
-                if i % val_freq == 0:
-                    val_image_batch = []
-                    val_caption_batch = []
-                    for j in range(val_size):
-                        temp_im = np.array(Image.open(val_image_path + val_image_list[j]))
-                        # If image has only one channel
-                        if len(np.shape(temp_im)) == 2:
-                            temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
-                        # Resize image
-                        resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
-                        # resized_temp_im = sess.run(g.get_tensor_by_name('Preprocessing/Sub:0'),{input_im:[temp_im]})
-                        val_image_batch.append(resized_temp_im[0])
+                    # # Get prediction
+                    # class_pred = np.argmax(sess.run(g.get_tensor_by_name('InceptionV3/Predictions/Softmax:0'),{input_im:image}))
+                    # print(labels[class_pred])
 
-                        # Use first caption in validation set
-                        val_caption_batch.append(val_dict[val_image_list[j]][0])
+                    # Evaluate every val_freq:th step
+                    if i % val_freq == 0:
+                        val_image_batch = []
+                        val_caption_batch = []
+                        for j in range(val_size):
+                            temp_im = np.array(Image.open(val_image_path + val_image_list[j]))
+                            # If image has only one channel
+                            if len(np.shape(temp_im)) == 2:
+                                temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
+                            # Resize image
+                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
+                            val_image_batch.append(resized_temp_im[0])
 
-                    val_caption_batch = np.stack(val_caption_batch, axis=0)
-                    val_image_batch = np.stack(val_image_batch, axis=0)
-                    val_cost = self.sess.run(self.cost_summary, feed_dict={normalized_im: val_image_batch, y: val_caption_batch})
-                    val_writer.add_summary(val_cost, i)
+                            # Use first caption in validation set
+                            val_caption_batch.append(val_dict[val_image_list[j]][0])
+
+                        val_caption_batch = np.stack(val_caption_batch, axis=0)
+                        val_image_batch = np.stack(val_image_batch, axis=0)
+                        val_cost = self.sess.run(self.cost_summary, feed_dict={normalized_im: val_image_batch, y: val_caption_batch})
+                        val_writer.add_summary(val_cost, e*len(train_image_list)+i)
+                        print(i, end=' ', flush=True)
+                print('')
             except KeyboardInterrupt:
                 break
 
