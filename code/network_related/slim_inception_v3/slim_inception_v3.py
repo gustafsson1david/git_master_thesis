@@ -17,7 +17,11 @@ class SlimInceptionV3(object):
         self.sess = tf.Session()
 
     # 'InceptionV3/InceptionV3/Mixed_7b/Branch_3/AvgPool_0a_3x3/AvgPool:0'
-    def build_graph(self, branch_path='InceptionV3/Logits/Dropout_1b/Identity:0', layers_to_train=[], own_layers=1):
+    def build_graph(self, branch_path='InceptionV3/Logits/Dropout_1b/Identity:0', layers_to_train=[], own_layers=1,
+                    init_learning_rate=1e-5, decay=0.9, momentum=0.0, lr_decay_freq=10000, lr_decay_factor=0.95,
+                    epsilon=1.0):
+        self.graph.as_default()
+        
         # Define preprocessing
         with tf.name_scope('Preprocessing'):
             input_im = tf.placeholder(tf.uint8, shape=[None, None, None, 3], name='input_im')
@@ -40,7 +44,7 @@ class SlimInceptionV3(object):
                 x = tf.nn.avg_pool(x, ksize=[1, 8, 8, 1], strides=[1, 2, 2, 1], padding='VALID')
             except:
                 pass
-            x = tf.squeeze(x)
+            x = tf.squeeze(x, [1, 2])
 
             # Calculate dimensions between own layers
             p = [int(300 + i * (branch_size - 300) / own_layers) for i in range(own_layers + 1)]
@@ -49,15 +53,15 @@ class SlimInceptionV3(object):
             # Build own fully-connected layers
             w, b, a, z = [], [], [], []
             for i in range(own_layers):
-                w.append(tf.Variable(tf.random_normal([p[i],p[i+1]], stddev=float('1e-5')), name='w_'+str(i)))
+                w.append(tf.Variable(tf.random_normal([p[i], p[i+1]], stddev=float('1e-5')), name='w_'+str(i)))
                 b.append(tf.Variable(tf.random_normal([1, p[i+1]]), name='b_'+str(i)))
                 if i == 0:
                     a.append(tf.add(tf.matmul(x, w[i]), b[i], name='a_'+str(i)))
                 else:
-                    a.append(tf.add(tf.matmul(a[i-1], w[i]), b[i], name='a_'+str(i)))
+                    a.append(tf.add(tf.matmul(z[i-1], w[i]), b[i], name='a_'+str(i)))
                 if i+1 != own_layers:
                     z.append(tf.nn.relu(a[i], name='relu_'+str(i)))
-            y_pred = a[-1]
+            y_pred = tf.identity(a[-1], name='y_pred')
             cost = tf.reduce_mean(tf.reduce_sum(tf.square(y - y_pred), axis=1), name='cost')
             cost_summary = tf.summary.scalar(name='cost_summary', tensor=cost)
 
@@ -72,16 +76,19 @@ class SlimInceptionV3(object):
 
         # Define optimization
         with tf.name_scope('Optimization'):
-            learning_rate = tf.placeholder(dtype="float", name='learning_rate')
-            momentum = tf.placeholder(dtype="float", name='momentum')
-            optimizer = tf.train.RMSPropOptimizer(learning_rate=learning_rate, momentum=momentum, name='Optimizer')
-            train_step = optimizer.minimize(cost, var_list=variables_to_train, name='train_step')
+            global_step = tf.Variable(0, trainable=False, name='global_step')
+            learning_rate = tf.train.exponential_decay(init_learning_rate, global_step=global_step,
+                                                       decay_steps=lr_decay_freq, decay_rate=lr_decay_factor,
+                                                       name='learning_rate')
+            rmsprop = tf.train.RMSPropOptimizer(learning_rate=learning_rate, decay=decay, momentum=momentum,
+                                                epsilon=epsilon, name='RMSProp')
+            train_step = rmsprop.minimize(cost, var_list=variables_to_train, global_step=global_step, name='train_step')
 
     def predict(self, path_list):
         # Get variable handles
         input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
         normalized_im = self.graph.get_tensor_by_name('InceptionV3/InceptionV3/Conv2d_1a_3x3/convolution:0')
-        y = self.graph.get_tensor_by_name('Own/y:0')
+        y_pred = self.graph.get_tensor_by_name('Own/y_pred:0')
 
         # Form batch and feed through
         image_batch = []
@@ -95,15 +102,15 @@ class SlimInceptionV3(object):
             image_batch.append(resized_temp_im[0])
 
         # Get prediction
-        batch_pred = self.sess.run(y, {input_im:image_batch})
+        batch_pred = self.sess.run(y_pred, {normalized_im: image_batch})
         return batch_pred
 
-    def restore_model(self, timestamp_to_restore):
+    def restore_model(self, meta_graph_path, checkpoint_dir):
         self.graph.as_default()
-        new_saver = tf.train.import_meta_graph('./runs/' + timestamp_to_restore + '/checkpoint/model.meta')
-        new_saver.restore(self.sess, tf.train.latest_checkpoint('./runs/' + timestamp_to_restore + '/checkpoint/'))
-        restored_model = tf.constant(timestamp_to_restore, name='restored_model')
-        print('\n\nModel restored from {}'.format('./runs/' + timestamp_to_restore + '/checkpoint/'))
+        new_saver = tf.train.import_meta_graph(meta_graph_path)
+        new_saver.restore(self.sess, tf.train.latest_checkpoint(checkpoint_dir))
+        restored_model = tf.constant(checkpoint_dir, name='restored_model')
+        print('\n\nModel restored from {}'.format(checkpoint_dir))
 
     def save_graph_layout(self):
         tf.summary.FileWriter('./runs/' + self.timestamp + '/graph/', graph=self.graph)
@@ -115,16 +122,15 @@ class SlimInceptionV3(object):
         save_path = new_saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
         print('\n\nTrained model saved to {}'.format(save_path))
 
-    def train(self, batch_size=1, epochs=1, learning_rate=1e-5, momentum=0.9, val_freq=100, val_size=10):
+    def train(self, batch_size=1, epochs=1, val_freq=100, val_size=10):
         self.graph.as_default()
 
-        # Read data
-        # Images
+        # Read images
         train_image_path = '../../../data/train2014/'
         train_image_list = os.listdir(train_image_path)
         val_image_path = '../../../data/val2014/'
         val_image_list = os.listdir(val_image_path)
-        # Caption dictionaries
+        # Read caption dictionaries
         train_dict = np.load('../../../data/word2vec_train.npy').item()
         val_dict = np.load('../../../data/word2vec_val.npy').item()
 
@@ -140,8 +146,6 @@ class SlimInceptionV3(object):
         input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
         normalized_im = self.graph.get_tensor_by_name('InceptionV3/InceptionV3/Conv2d_1a_3x3/convolution:0')
         y = self.graph.get_tensor_by_name('Own/y:0')
-        learning_rate_t = self.graph.get_tensor_by_name('Optimization/learning_rate:0')
-        momentum_t = self.graph.get_tensor_by_name('Optimization/momentum:0')
         cost_summary = self.graph.get_tensor_by_name('Own/cost_summary:0')
         train_step = self.graph.get_operation_by_name('Optimization/train_step')
 
@@ -179,9 +183,7 @@ class SlimInceptionV3(object):
                     caption_batch = np.stack(caption_batch, axis=0)
                     image_batch = np.stack(image_batch, axis=0)
                     [batch_cost, _] = self.sess.run([cost_summary, train_step],
-                                                    feed_dict={normalized_im: image_batch, y: caption_batch,
-                                                               learning_rate_t: learning_rate,
-                                                               momentum_t: momentum})
+                                                    feed_dict={normalized_im: image_batch, y: caption_batch})
                     train_writer.add_summary(summary=batch_cost, global_step=e * len(train_image_list) + i)
 
                     # Evaluate every val_freq:th step
