@@ -16,18 +16,17 @@ class SlimInceptionV3(object):
         self.graph = tf.get_default_graph()
         self.sess = tf.Session()
 
-    # 'InceptionV3/InceptionV3/Mixed_7b/Branch_3/AvgPool_0a_3x3/AvgPool:0'
-    def build_graph(self, branch_path='InceptionV3/Logits/Dropout_1b/Identity:0', layers_to_train=[], own_layers=1,
+    def build_graph(self, branch_path='InceptionV3/Logits/AvgPool_1a_8x8/AvgPool:0', layers_to_train=[], own_layers=1,
                     init_learning_rate=1e-5, decay=0.9, momentum=0.0, lr_decay_freq=10000, lr_decay_factor=0.95,
                     epsilon=1.0):
         self.graph.as_default()
-        
+
         # Define preprocessing
         with tf.name_scope('Preprocessing'):
             input_im = tf.placeholder(tf.uint8, shape=[None, None, None, 3], name='input_im')
             resized_im = tf.image.resize_bilinear(tf.image.convert_image_dtype(
                 tf.convert_to_tensor(input_im), dtype=tf.float32), [299, 299], name='resized_im')
-            normalized_im = tf.mul(tf.sub(resized_im, 0.5), 2.0, name='normalized_im')
+            normalized_im = tf.multiply(tf.subtract(resized_im, 0.5), 2.0, name='normalized_im')
 
         # Load Inception-v3 graph from slim
         with slim.arg_scope(inception_v3_arg_scope()):
@@ -83,6 +82,7 @@ class SlimInceptionV3(object):
             rmsprop = tf.train.RMSPropOptimizer(learning_rate=learning_rate, decay=decay, momentum=momentum,
                                                 epsilon=epsilon, name='RMSProp')
             train_step = rmsprop.minimize(cost, var_list=variables_to_train, global_step=global_step, name='train_step')
+        return tf.global_variables()
 
     def predict(self, path_list):
         # Get variable handles
@@ -110,17 +110,17 @@ class SlimInceptionV3(object):
         new_saver = tf.train.import_meta_graph(meta_graph_path)
         new_saver.restore(self.sess, tf.train.latest_checkpoint(checkpoint_dir))
         restored_model = tf.constant(checkpoint_dir, name='restored_model')
-        print('\n\nModel restored from {}'.format(checkpoint_dir))
+        print('Model restored from {}'.format(checkpoint_dir))
 
     def save_graph_layout(self):
         tf.summary.FileWriter('./runs/' + self.timestamp + '/graph/', graph=self.graph)
-        print('\n\nGraph layout saved to {}'.format('./runs/' + self.timestamp + '/graph/'))
+        print('Graph layout saved to {}'.format('./runs/' + self.timestamp + '/graph/'))
 
     def save_model(self):
         os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
         new_saver = tf.train.Saver()
         save_path = new_saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
-        print('\n\nTrained model saved to {}'.format(save_path))
+        print('Trained model saved to {}'.format(save_path))
 
     def train(self, batch_size=1, epochs=1, val_freq=100, val_size=10):
         self.graph.as_default()
@@ -135,7 +135,9 @@ class SlimInceptionV3(object):
         val_dict = np.load('../../../data/word2vec_val.npy').item()
 
         # Initialize variables
-        saver = tf.train.Saver(var_list=[v for v in tf.global_variables() if v.name.startswith('InceptionV3/')])
+        slim_var_names = [s[0] for s in tf.contrib.framework.list_variables(
+            checkpoint_dir='../../../data/inception-2016-08-28/inception_v3.ckpt')][:-1]
+        saver = tf.train.Saver(var_list=[v for v in tf.global_variables() if v.name[:-2] in slim_var_names])
         saver.restore(self.sess, "../../../data/inception-2016-08-28/inception_v3.ckpt")
         uninitialized = self.sess.run(tf.report_uninitialized_variables())
         uninitialized = [str(v)[2:-1] + ':0' for v in uninitialized]
@@ -176,7 +178,8 @@ class SlimInceptionV3(object):
 
                             # Choose one of the five captions randomly
                             r = random.randrange(len(train_dict[train_image_list[i + j]]))
-                            caption_batch.append(train_dict[train_image_list[i + j]][r])
+                            temp_caption = train_dict[train_image_list[i + j]][r]
+                            caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
                         except IndexError:
                             pass
 
@@ -200,7 +203,8 @@ class SlimInceptionV3(object):
                             val_image_batch.append(resized_temp_im[0])
 
                             # Use first caption in validation set
-                            val_caption_batch.append(val_dict[val_image_list[j]][0])
+                            temp_caption = val_dict[val_image_list[j]][0]
+                            val_caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
 
                         val_caption_batch = np.stack(val_caption_batch, axis=0)
                         val_image_batch = np.stack(val_image_batch, axis=0)
@@ -210,4 +214,6 @@ class SlimInceptionV3(object):
                         print(i, end=' ', flush=True)
                 print('')
             except KeyboardInterrupt:
+                print('')
                 break
+        print('')
