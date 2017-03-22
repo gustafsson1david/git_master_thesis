@@ -17,8 +17,8 @@ class SlimInceptionV3(object):
         self.sess = tf.Session()
 
     def build_graph(self, branch_path='InceptionV3/Logits/AvgPool_1a_8x8/AvgPool:0', layers_to_train=[], own_layers=1,
-                    init_learning_rate=1e-5, decay=0.9, momentum=0.0, lr_decay_freq=10000, lr_decay_factor=0.95,
-                    epsilon=1.0):
+                    init_learning_rate=1e-5, lr_decay_freq=10000, lr_decay_factor=0.95,
+                    epsilon=0.01,  alpha=1.0, activation='tanh'):
         self.graph.as_default()
 
         # Define preprocessing
@@ -59,10 +59,27 @@ class SlimInceptionV3(object):
                 else:
                     a.append(tf.add(tf.matmul(z[i-1], w[i]), b[i], name='a_'+str(i)))
                 if i+1 != own_layers:
-                    z.append(tf.nn.relu(a[i], name='relu_'+str(i)))
+                    if activation == 'relu':
+                        z.append(tf.nn.relu(a[i], name='relu_' + str(i)))
+                    elif activation == 'tanh':
+                        z.append(tf.nn.tanh(a[i], name='tanh_' + str(i)))
+                    else:
+                        print("'" + activation + "'is not a valid activation function. Falling back to 'tanh'.")
+                        z.append(tf.nn.tanh(a[i], name='tanh_' + str(i)))
+
             y_pred = tf.identity(a[-1], name='y_pred')
-            cost = tf.reduce_mean(tf.reduce_sum(tf.square(y - y_pred), axis=1), name='cost')
-            cost_summary = tf.summary.scalar(name='cost_summary', tensor=cost)
+            with tf.name_scope('L2 distance'):
+                l2_dist = tf.nn.l2_loss(y - y_pred, name='l2_dist')
+                tf.summary.scalar(name='squared_l2_distance', tensor=l2_dist)
+            with tf.name_scope('Cosine distance'):
+                cos_dist = tf.losses.cosine_distance(tf.nn.l2_normalize(y, dim=1),
+                                                     tf.nn.l2_normalize(y_pred, dim=1), dim=1)
+                tf.summary.scalar(name='cosine_distance', tensor=cos_dist)
+            with tf.name_scope('Mixed distance'):
+                mixed_dist = tf.add(alpha*cos_dist, (1-alpha)*l2_dist, name='mixed_dist')
+                tf.summary.scalar(name='mixed_distance', tensor=mixed_dist)
+            y_pred_norm = tf.norm(tf.reduce_mean(y_pred), name='y_pred_norm')
+            tf.summary.scalar(name='pred_norm', tensor=y_pred_norm)
 
         # Define variables to train
         variables_to_train = w + b
@@ -79,10 +96,9 @@ class SlimInceptionV3(object):
             learning_rate = tf.train.exponential_decay(init_learning_rate, global_step=global_step,
                                                        decay_steps=lr_decay_freq, decay_rate=lr_decay_factor,
                                                        name='learning_rate')
-            rmsprop = tf.train.RMSPropOptimizer(learning_rate=learning_rate, decay=decay, momentum=momentum,
-                                                epsilon=epsilon, name='RMSProp')
-            train_step = rmsprop.minimize(cost, var_list=variables_to_train, global_step=global_step, name='train_step')
-        return tf.global_variables()
+            adam = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=epsilon, name='Adam')
+            train_step = adam.minimize(mixed_dist, var_list=variables_to_train, global_step=global_step,
+                                       name='train_step')
 
     def predict(self, path_list):
         # Get variable handles
@@ -95,7 +111,7 @@ class SlimInceptionV3(object):
         for i in range(len(path_list)):
             temp_im = np.array(Image.open(path_list[i]))
             # If image has only one channel
-            if len(np.shape(temp_im)) == 2:
+            if np.ndim(temp_im) == 2:
                 temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
             # Resize image
             resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
@@ -105,11 +121,11 @@ class SlimInceptionV3(object):
         batch_pred = self.sess.run(y_pred, {normalized_im: image_batch})
         return batch_pred
 
-    def restore_model(self, meta_graph_path, checkpoint_dir):
+    def restore_model(self, checkpoint_dir):
         self.graph.as_default()
-        new_saver = tf.train.import_meta_graph(meta_graph_path)
+        new_saver = tf.train.import_meta_graph(checkpoint_dir+'model.meta')
         new_saver.restore(self.sess, tf.train.latest_checkpoint(checkpoint_dir))
-        restored_model = tf.constant(checkpoint_dir, name='restored_model')
+        tf.constant(checkpoint_dir, name='restored_model')
         print('Model restored from {}'.format(checkpoint_dir))
 
     def save_graph_layout(self):
@@ -122,7 +138,7 @@ class SlimInceptionV3(object):
         save_path = new_saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
         print('Trained model saved to {}'.format(save_path))
 
-    def train(self, batch_size=1, epochs=1, val_freq=100, val_size=10):
+    def train(self, batch_size=1, epochs=1, val_freq=100, val_size=10, norm_cap=False):
         self.graph.as_default()
 
         # Read images
@@ -148,8 +164,8 @@ class SlimInceptionV3(object):
         input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
         normalized_im = self.graph.get_tensor_by_name('InceptionV3/InceptionV3/Conv2d_1a_3x3/convolution:0')
         y = self.graph.get_tensor_by_name('Own/y:0')
-        cost_summary = self.graph.get_tensor_by_name('Own/cost_summary:0')
         train_step = self.graph.get_operation_by_name('Optimization/train_step')
+        all_summaries = tf.summary.merge_all()
 
         # Initialize writers
         train_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/train/', flush_secs=20)
@@ -170,7 +186,7 @@ class SlimInceptionV3(object):
                         try:
                             temp_im = np.array(Image.open(train_image_path + train_image_list[i + j]))
                             # If image has only one channel
-                            if len(np.shape(temp_im)) == 2:
+                            if np.ndim(temp_im) == 2:
                                 temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
                             # Resize image
                             resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
@@ -179,15 +195,18 @@ class SlimInceptionV3(object):
                             # Choose one of the five captions randomly
                             r = random.randrange(len(train_dict[train_image_list[i + j]]))
                             temp_caption = train_dict[train_image_list[i + j]][r]
-                            caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
+                            if norm_cap:
+                                caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
+                            else:
+                                caption_batch.append(temp_caption)
                         except IndexError:
                             pass
 
                     caption_batch = np.stack(caption_batch, axis=0)
                     image_batch = np.stack(image_batch, axis=0)
-                    [batch_cost, _] = self.sess.run([cost_summary, train_step],
-                                                    feed_dict={normalized_im: image_batch, y: caption_batch})
-                    train_writer.add_summary(summary=batch_cost, global_step=e * len(train_image_list) + i)
+                    [summaries, _] = self.sess.run([all_summaries, train_step],
+                                                   feed_dict={normalized_im: image_batch, y: caption_batch})
+                    train_writer.add_summary(summary=summaries, global_step=e * len(train_image_list) + i)
 
                     # Evaluate every val_freq:th step
                     if i % val_freq == 0:
@@ -196,7 +215,7 @@ class SlimInceptionV3(object):
                         for j in range(val_size):
                             temp_im = np.array(Image.open(val_image_path + val_image_list[j]))
                             # If image has only one channel
-                            if len(np.shape(temp_im)) == 2:
+                            if np.ndim(temp_im) == 2:
                                 temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
                             # Resize image
                             resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
@@ -208,9 +227,10 @@ class SlimInceptionV3(object):
 
                         val_caption_batch = np.stack(val_caption_batch, axis=0)
                         val_image_batch = np.stack(val_image_batch, axis=0)
-                        val_cost = self.sess.run(cost_summary,
-                                                 feed_dict={normalized_im: val_image_batch, y: val_caption_batch})
-                        val_writer.add_summary(val_cost, e * len(train_image_list) + i)
+                        summaries = self.sess.run(all_summaries,
+                                                  feed_dict={normalized_im: val_image_batch,
+                                                                       y: val_caption_batch})
+                        val_writer.add_summary(summaries, e * len(train_image_list) + i)
                         print(i, end=' ', flush=True)
                 print('')
             except KeyboardInterrupt:
