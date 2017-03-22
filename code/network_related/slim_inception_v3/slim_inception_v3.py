@@ -68,14 +68,14 @@ class SlimInceptionV3(object):
                         z.append(tf.nn.tanh(a[i], name='tanh_' + str(i)))
 
             y_pred = tf.identity(a[-1], name='y_pred')
-            with tf.name_scope('L2 distance'):
+            with tf.name_scope('L2_distance'):
                 l2_dist = tf.nn.l2_loss(y - y_pred, name='l2_dist')
                 tf.summary.scalar(name='squared_l2_distance', tensor=l2_dist)
-            with tf.name_scope('Cosine distance'):
+            with tf.name_scope('Cosine_distance'):
                 cos_dist = tf.losses.cosine_distance(tf.nn.l2_normalize(y, dim=1),
                                                      tf.nn.l2_normalize(y_pred, dim=1), dim=1)
                 tf.summary.scalar(name='cosine_distance', tensor=cos_dist)
-            with tf.name_scope('Mixed distance'):
+            with tf.name_scope('Mixed_distance'):
                 mixed_dist = tf.add(alpha*cos_dist, (1-alpha)*l2_dist, name='mixed_dist')
                 tf.summary.scalar(name='mixed_distance', tensor=mixed_dist)
             y_pred_norm = tf.norm(tf.reduce_mean(y_pred), name='y_pred_norm')
