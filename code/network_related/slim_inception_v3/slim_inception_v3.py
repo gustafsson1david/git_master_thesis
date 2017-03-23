@@ -15,11 +15,27 @@ class SlimInceptionV3(object):
         self.timestamp = time.strftime('%Y%m%d-%H%M', time.localtime())
         self.graph = tf.get_default_graph()
         self.sess = tf.Session()
+        self.saver = None
 
     def build_graph(self, branch_path='InceptionV3/Logits/AvgPool_1a_8x8/AvgPool:0', layers_to_train=[], own_layers=1,
                     init_learning_rate=1e-5, lr_decay_freq=10000, lr_decay_factor=0.95,
                     epsilon=0.01,  alpha=1.0, activation='tanh'):
         self.graph.as_default()
+
+        # Write parameters to file
+        if not os.path.exists('./runs/'):
+            os.makedirs('./runs/')
+            os.makedirs('./runs/'+self.timestamp+'/')
+        with open('./runs/'+self.timestamp+'/parameters', 'a+') as run_info:
+            params = locals()
+            print("Graph parameters:")
+            run_info.write("Graph parameters:\n")
+            for attr, value in params.items():
+                if attr != 'self' and attr != 'run_info':
+                    print("{}={}".format(attr.upper(), value))
+                    run_info.write("{}={}\n".format(attr.upper(), value))
+            print("")
+            run_info.write("\n")
 
         # Define preprocessing
         with tf.name_scope('Preprocessing'):
@@ -133,13 +149,23 @@ class SlimInceptionV3(object):
         print('Graph layout saved to {}'.format('./runs/' + self.timestamp + '/graph/'))
 
     def save_model(self):
-        os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
-        new_saver = tf.train.Saver()
-        save_path = new_saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
+        save_path = self.saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
         print('Trained model saved to {}'.format(save_path))
 
     def train(self, batch_size=1, epochs=1, val_freq=100, val_size=10, norm_cap=False):
         self.graph.as_default()
+
+        # Write hyperparameters to file
+        with open('./runs/' + self.timestamp + '/parameters', 'a+') as run_info:
+            params = locals()
+            print("Train parameters:")
+            run_info.write("Train parameters:\n")
+            for attr, value in params.items():
+                if attr != 'self' and attr != 'run_info':
+                    print("{}={}".format(attr.upper(), value))
+                    run_info.write("{}={}\n".format(attr.upper(), value))
+            print("")
+            run_info.write("\n")
 
         # Read images
         train_image_path = '../../../data/train2014/'
@@ -153,8 +179,8 @@ class SlimInceptionV3(object):
         # Initialize variables
         slim_var_names = [s[0] for s in tf.contrib.framework.list_variables(
             checkpoint_dir='../../../data/inception-2016-08-28/inception_v3.ckpt')][:-1]
-        saver = tf.train.Saver(var_list=[v for v in tf.global_variables() if v.name[:-2] in slim_var_names])
-        saver.restore(self.sess, "../../../data/inception-2016-08-28/inception_v3.ckpt")
+        slim_saver = tf.train.Saver(var_list=[v for v in tf.global_variables() if v.name[:-2] in slim_var_names])
+        slim_saver.restore(self.sess, "../../../data/inception-2016-08-28/inception_v3.ckpt")
         uninitialized = self.sess.run(tf.report_uninitialized_variables())
         uninitialized = [str(v)[2:-1] + ':0' for v in uninitialized]
         uninitialized = [v for v in tf.global_variables() if v.name in uninitialized]
@@ -171,12 +197,19 @@ class SlimInceptionV3(object):
         train_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/train/', flush_secs=20)
         val_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/val/', flush_secs=20)
 
+        # Initialize saver
+        os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
+        self.saver = tf.train.Saver(max_to_keep=1)
+
         # Train
         for e in range(epochs):
             try:
                 print('Epoch {}'.format(e + 1))
                 if e > 0:
                     random.shuffle(train_image_list)
+                    # Save checkpoint every epoch
+                    save_path = self.saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
+                    print('Trained model saved to {}'.format(save_path))
 
                 for i in range(len(train_image_list))[::batch_size]:
                     image_batch = []
@@ -228,8 +261,7 @@ class SlimInceptionV3(object):
                         val_caption_batch = np.stack(val_caption_batch, axis=0)
                         val_image_batch = np.stack(val_image_batch, axis=0)
                         summaries = self.sess.run(all_summaries,
-                                                  feed_dict={normalized_im: val_image_batch,
-                                                                       y: val_caption_batch})
+                                                  feed_dict={normalized_im: val_image_batch, y: val_caption_batch})
                         val_writer.add_summary(summaries, e * len(train_image_list) + i)
                         print(i, end=' ', flush=True)
                 print('')
