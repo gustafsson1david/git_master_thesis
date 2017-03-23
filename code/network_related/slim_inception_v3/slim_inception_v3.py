@@ -23,8 +23,7 @@ class SlimInceptionV3(object):
         self.graph.as_default()
 
         # Write parameters to file
-        if not os.path.exists('./runs/'):
-            os.makedirs('./runs/')
+        if not os.path.exists('./runs/'+self.timestamp+'/'):
             os.makedirs('./runs/'+self.timestamp+'/')
         with open('./runs/'+self.timestamp+'/parameters', 'a+') as run_info:
             params = locals()
