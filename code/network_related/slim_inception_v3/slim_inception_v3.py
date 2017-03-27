@@ -65,7 +65,8 @@ class SlimInceptionV3(object):
             p = p[::-1]
 
             # Build own fully-connected layers
-            w, b, a, z = [], [], [], []
+            w, b, a, n, z = [], [], [], [], []
+            training = tf.placeholder(tf.bool, name='phase')
             for i in range(own_layers):
                 w.append(tf.Variable(tf.random_normal([p[i], p[i+1]], stddev=float('1e-5')), name='w_'+str(i)))
                 b.append(tf.Variable(tf.random_normal([1, p[i+1]]), name='b_'+str(i)))
@@ -74,17 +75,18 @@ class SlimInceptionV3(object):
                 else:
                     a.append(tf.add(tf.matmul(z[i-1], w[i]), b[i], name='a_'+str(i)))
                 if i+1 != own_layers:
+                    n.append(tf.layers.batch_normalization(a[i], training=training, name='n_'+str(i)))
                     if activation == 'relu':
-                        z.append(tf.nn.relu(a[i], name='relu_' + str(i)))
+                        z.append(tf.nn.relu(n[i], name='relu_' + str(i)))
                     elif activation == 'tanh':
-                        z.append(tf.nn.tanh(a[i], name='tanh_' + str(i)))
+                        z.append(tf.nn.tanh(n[i], name='tanh_' + str(i)))
                     else:
-                        print("'" + activation + "'is not a valid activation function. Falling back to 'tanh'.")
-                        z.append(tf.nn.tanh(a[i], name='tanh_' + str(i)))
+                        print("'" + activation + "' is not a valid activation function. Falling back to 'tanh'.")
+                        z.append(tf.nn.tanh(n[i], name='tanh_' + str(i)))
 
             y_pred = tf.identity(a[-1], name='y_pred')
             with tf.name_scope('L2_distance'):
-                l2_dist = tf.nn.l2_loss(y - y_pred, name='l2_dist')
+                l2_dist = tf.reduce_mean(tf.reduce_sum(tf.square(y - y_pred), axis=1), name='l2_dist')
                 tf.summary.scalar(name='squared_l2_distance', tensor=l2_dist)
             with tf.name_scope('Cosine_distance'):
                 cos_dist = tf.losses.cosine_distance(tf.nn.l2_normalize(y, dim=1),
@@ -93,7 +95,7 @@ class SlimInceptionV3(object):
             with tf.name_scope('Mixed_distance'):
                 mixed_dist = tf.add(alpha*cos_dist, (1-alpha)*l2_dist, name='mixed_dist')
                 tf.summary.scalar(name='mixed_distance', tensor=mixed_dist)
-            y_pred_norm = tf.norm(tf.reduce_mean(y_pred), name='y_pred_norm')
+            y_pred_norm = tf.reduce_mean(tf.norm(y_pred, axis=1), name='y_pred_norm')
             tf.summary.scalar(name='pred_norm', tensor=y_pred_norm)
 
         # Define variables to train
@@ -119,6 +121,7 @@ class SlimInceptionV3(object):
         # Get variable handles
         input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
         normalized_im = self.graph.get_tensor_by_name('InceptionV3/InceptionV3/Conv2d_1a_3x3/convolution:0')
+        phase = self.graph.get_tensor_by_name('Own/phase:0')
         y_pred = self.graph.get_tensor_by_name('Own/y_pred:0')
 
         # Form batch and feed through
@@ -129,7 +132,7 @@ class SlimInceptionV3(object):
             if np.ndim(temp_im) == 2:
                 temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
             # Resize image
-            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
+            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im], phase: False})
             image_batch.append(resized_temp_im[0])
 
         # Get prediction
@@ -190,6 +193,7 @@ class SlimInceptionV3(object):
         normalized_im = self.graph.get_tensor_by_name('InceptionV3/InceptionV3/Conv2d_1a_3x3/convolution:0')
         y = self.graph.get_tensor_by_name('Own/y:0')
         train_step = self.graph.get_operation_by_name('Optimization/train_step')
+        phase = self.graph.get_tensor_by_name('Own/phase:0')
         all_summaries = tf.summary.merge_all()
 
         # Initialize writers
@@ -237,7 +241,9 @@ class SlimInceptionV3(object):
                     caption_batch = np.stack(caption_batch, axis=0)
                     image_batch = np.stack(image_batch, axis=0)
                     [summaries, _] = self.sess.run([all_summaries, train_step],
-                                                   feed_dict={normalized_im: image_batch, y: caption_batch})
+                                                   feed_dict={normalized_im: image_batch,
+                                                              y: caption_batch,
+                                                              phase: False})
                     train_writer.add_summary(summary=summaries, global_step=e * len(train_image_list) + i)
 
                     # Evaluate every val_freq:th step
@@ -260,7 +266,9 @@ class SlimInceptionV3(object):
                         val_caption_batch = np.stack(val_caption_batch, axis=0)
                         val_image_batch = np.stack(val_image_batch, axis=0)
                         summaries = self.sess.run(all_summaries,
-                                                  feed_dict={normalized_im: val_image_batch, y: val_caption_batch})
+                                                  feed_dict={normalized_im: val_image_batch,
+                                                             y: val_caption_batch,
+                                                             phase: False})
                         val_writer.add_summary(summaries, e * len(train_image_list) + i)
                         print(i, end=' ', flush=True)
                 print('')
