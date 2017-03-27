@@ -18,7 +18,7 @@ class SlimInceptionV3(object):
         self.saver = None
 
     def build_graph(self, branch_path='InceptionV3/Logits/AvgPool_1a_8x8/AvgPool:0', layers_to_train=[], own_layers=1,
-                    init_learning_rate=1e-5, lr_decay_freq=10000, lr_decay_factor=0.95,
+                    init_learning_rate=1e-3, lr_decay_freq=10000.0, lr_decay_factor=0.95,
                     epsilon=0.01,  alpha=1.0, activation='tanh'):
         self.graph.as_default()
 
@@ -276,3 +276,27 @@ class SlimInceptionV3(object):
                 print('')
                 break
         print('')
+
+if __name__ == "__main__":
+
+    branch_path = ['InceptionV3/InceptionV3/Mixed_7b/concat:0',
+                   'InceptionV3/InceptionV3/Mixed_7a/concat:0',
+                   'InceptionV3/InceptionV3/Mixed_6d/concat:0']
+    layers_to_train = [[['Mixed_7b', 'Mixed_7a', 'Mixed_6e', 'Mixed_6d'],
+                        ['Mixed_7b']],
+                       [['Mixed_7a', 'Mixed_6e', 'Mixed_6d', 'Mixed_6c'],
+                        ['Mixed_7a']],
+                       [['Mixed_6d', 'Mixed_6c', 'Mixed_6b', 'Mixed_6a'],
+                        ['Mixed_6d']]]
+    own_layers = [3, 1]
+
+    for i, b in enumerate(branch_path):
+        for l in layers_to_train[i]:
+            for o in own_layers:
+                net = SlimInceptionV3()
+                net.build_graph(branch_path=b, layers_to_train=l, own_layers=o,
+                                init_learning_rate=1e-3, lr_decay_freq=1e10, lr_decay_factor=1,
+                                epsilon=0.01, alpha=0.0, activation='tanh')
+                net.save_graph_layout()
+                net.train(batch_size=32, epochs=1, val_freq=1000, val_size=100, norm_cap=False)
+                net.save_model()
