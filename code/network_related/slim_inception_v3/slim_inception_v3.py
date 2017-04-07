@@ -1,4 +1,5 @@
 import os
+import sys
 import numpy as np
 import random
 import time
@@ -23,18 +24,19 @@ class SlimInceptionV3(object):
         self.graph.as_default()
 
         # Write parameters to file
-        if not os.path.exists('./runs/'+self.timestamp+'/'):
-            os.makedirs('./runs/'+self.timestamp+'/')
-        with open('./runs/'+self.timestamp+'/parameters', 'a+') as run_info:
-            params = locals()
-            print("Graph parameters:")
-            run_info.write("Graph parameters:\n")
-            for attr, value in params.items():
-                if attr != 'self' and attr != 'run_info':
-                    print("{}={}".format(attr.upper(), value))
-                    run_info.write("{}={}\n".format(attr.upper(), value))
-            print("")
-            run_info.write("\n")
+        with self.graph.device('/cpu:0'):
+            if not os.path.exists('./runs/'+self.timestamp+'/'):
+                os.makedirs('./runs/'+self.timestamp+'/')
+            with open('./runs/'+self.timestamp+'/parameters', 'a+') as run_info:
+                params = locals()
+                print("Graph parameters:")
+                run_info.write("Graph parameters:\n")
+                for attr, value in params.items():
+                    if attr != 'self' and attr != 'run_info':
+                        print("{}={}".format(attr.upper(), value))
+                        run_info.write("{}={}\n".format(attr.upper(), value))
+                print("")
+                run_info.write("\n")
 
         # Define preprocessing
         with tf.name_scope('Preprocessing'):
@@ -54,10 +56,7 @@ class SlimInceptionV3(object):
             # Branch from original network and shape tensor
             x = self.graph.get_tensor_by_name(branch_path)
             branch_size = int(x.get_shape()[-1])
-            try:
-                x = tf.nn.avg_pool(x, ksize=[1, 8, 8, 1], strides=[1, 2, 2, 1], padding='VALID')
-            except:
-                pass
+            x = tf.nn.avg_pool(x, ksize=[1]+list(x.get_shape()[1:3])+[1], strides=[1, 1, 1, 1], padding='VALID')
             x = tf.squeeze(x, [1, 2])
 
             # Calculate dimensions between own layers
@@ -86,8 +85,8 @@ class SlimInceptionV3(object):
 
             y_pred = tf.identity(a[-1], name='y_pred')
             with tf.name_scope('L2_distance'):
-                l2_dist = tf.reduce_mean(tf.reduce_sum(tf.square(y - y_pred), axis=1), name='l2_dist')
-                tf.summary.scalar(name='squared_l2_distance', tensor=l2_dist)
+                l2_dist = tf.reduce_mean(tf.sqrt(tf.reduce_sum(tf.square(y - y_pred), axis=1)), name='l2_dist')
+                tf.summary.scalar(name='l2_distance', tensor=l2_dist)
             with tf.name_scope('Cosine_distance'):
                 cos_dist = tf.losses.cosine_distance(tf.nn.l2_normalize(y, dim=1),
                                                      tf.nn.l2_normalize(y_pred, dim=1), dim=1)
@@ -95,18 +94,28 @@ class SlimInceptionV3(object):
             with tf.name_scope('Mixed_distance'):
                 mixed_dist = tf.add(alpha*cos_dist, (1-alpha)*l2_dist, name='mixed_dist')
                 tf.summary.scalar(name='mixed_distance', tensor=mixed_dist)
-            y_pred_norm = tf.reduce_mean(tf.norm(y_pred, axis=1), name='y_pred_norm')
-            tf.summary.scalar(name='pred_norm', tensor=y_pred_norm)
+            with tf.name_scope('Misc_summaries'):
+                y_pred_norm = tf.reduce_mean(tf.norm(y_pred, axis=1), name='y_pred_norm')
+                tf.summary.scalar(name='pred_norm', tensor=y_pred_norm)
+                norm_diff = tf.reduce_mean(tf.norm(y_pred, axis=1) - tf.norm(y, axis=1))
+                tf.summary.scalar(name='norm_diff', tensor=norm_diff)
+                mean_tiled = tf.tile(tf.expand_dims(tf.reduce_mean(y, axis=0), 0), tf.stack([tf.shape(y_pred)[0], 1]))
+                mean_diff = tf.losses.cosine_distance(tf.nn.l2_normalize(mean_tiled, dim=1),
+                                                     tf.nn.l2_normalize(y_pred, dim=1), dim=1)
+                tf.summary.scalar(name='mean_diff', tensor=mean_diff)
 
         # Define variables to train
-        variables_to_train = w + b
-        for layer in layers_to_train:
-            variables_to_train.extend([v for v in tf.global_variables() if
-                                       v.name.startswith('InceptionV3/'+layer) and
-                                       (v.name.endswith('weights:0') or
-                                        v.name.endswith('biases:0') or
-                                        v.name.endswith('beta:0'))])
-
+        if layers_to_train == ['all']:
+            variables_to_train = tf.trainable_variables()
+        else:
+            variables_to_train = w + b
+            for layer in layers_to_train:
+                variables_to_train.extend([v for v in tf.global_variables() if
+                                           v.name.startswith('InceptionV3/'+layer) and
+                                           (v.name.endswith('weights:0') or
+                                            v.name.endswith('biases:0') or
+                                            v.name.endswith('beta:0'))])
+        
         # Define optimization
         with tf.name_scope('Optimization'):
             global_step = tf.Variable(0, trainable=False, name='global_step')
@@ -158,16 +167,17 @@ class SlimInceptionV3(object):
         self.graph.as_default()
 
         # Write hyperparameters to file
-        with open('./runs/' + self.timestamp + '/parameters', 'a+') as run_info:
-            params = locals()
-            print("Train parameters:")
-            run_info.write("Train parameters:\n")
-            for attr, value in params.items():
-                if attr != 'self' and attr != 'run_info':
-                    print("{}={}".format(attr.upper(), value))
-                    run_info.write("{}={}\n".format(attr.upper(), value))
-            print("")
-            run_info.write("\n")
+        with self.graph.device('/cpu:0'):
+            with open('./runs/' + self.timestamp + '/parameters', 'a+') as run_info:
+                params = locals()
+                print("Train parameters:")
+                run_info.write("Train parameters:\n")
+                for attr, value in params.items():
+                    if attr != 'self' and attr != 'run_info':
+                        print("{}={}".format(attr.upper(), value))
+                        run_info.write("{}={}\n".format(attr.upper(), value))
+                print("")
+                run_info.write("\n")
 
         # Read images
         train_image_path = '../../../data/train2014/'
@@ -190,7 +200,7 @@ class SlimInceptionV3(object):
 
         # Get variable handles
         input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
-        normalized_im = self.graph.get_tensor_by_name('InceptionV3/InceptionV3/Conv2d_1a_3x3/convolution:0')
+        normalized_im = self.graph.get_tensor_by_name('Preprocessing/normalized_im:0')
         y = self.graph.get_tensor_by_name('Own/y:0')
         train_step = self.graph.get_operation_by_name('Optimization/train_step')
         phase = self.graph.get_tensor_by_name('Own/phase:0')
@@ -201,7 +211,10 @@ class SlimInceptionV3(object):
         val_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/val/', flush_secs=20)
 
         # Initialize saver
-        os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
+        try:
+            os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
+        except FileExistError:
+            pass
         self.saver = tf.train.Saver(max_to_keep=1)
 
         # Train
@@ -279,24 +292,33 @@ class SlimInceptionV3(object):
 
 if __name__ == "__main__":
 
-    branch_path = ['InceptionV3/InceptionV3/Mixed_7b/concat:0',
-                   'InceptionV3/InceptionV3/Mixed_7a/concat:0',
-                   'InceptionV3/InceptionV3/Mixed_6d/concat:0']
-    layers_to_train = [[['Mixed_7b', 'Mixed_7a', 'Mixed_6e', 'Mixed_6d'],
-                        ['Mixed_7b']],
-                       [['Mixed_7a', 'Mixed_6e', 'Mixed_6d', 'Mixed_6c'],
-                        ['Mixed_7a']],
-                       [['Mixed_6d', 'Mixed_6c', 'Mixed_6b', 'Mixed_6a'],
-                        ['Mixed_6d']]]
-    own_layers = [3, 1]
+    branch_path = ['InceptionV3/InceptionV3/Mixed_6d/concat:0',
+                   'InceptionV3/InceptionV3/Mixed_6d/concat:0',
+                   'InceptionV3/InceptionV3/Mixed_6a/concat:0']
+    layers_to_train = [[['all'],
+                        ['Mixed_7b', 'Mixed_7a', 'Mixed_6e'],
+                        []],
+                       [['all'],
+                        ['Mixed_6d', 'Mixed_6c', 'Mixed_6b'],
+                        []],
+                       [['all'],
+                        ['Mixed_6a', 'Mixed_5d', 'Mixed_5c'],
+                        []]]
+    own_layers = [1, 3]
+    alpha = [0, 0.95]
 
+    count = 1
     for i, b in enumerate(branch_path):
         for l in layers_to_train[i]:
             for o in own_layers:
-                net = SlimInceptionV3()
-                net.build_graph(branch_path=b, layers_to_train=l, own_layers=o,
-                                init_learning_rate=1e-3, lr_decay_freq=1e10, lr_decay_factor=1,
-                                epsilon=0.01, alpha=0.0, activation='tanh')
-                net.save_graph_layout()
-                net.train(batch_size=32, epochs=1, val_freq=1000, val_size=100, norm_cap=False)
-                net.save_model()
+                for a in alpha:
+                    if str(count) == sys.argv[1]:
+                        net = SlimInceptionV3()
+                        net.build_graph(branch_path=b, layers_to_train=l, own_layers=o,
+                                        init_learning_rate=1e-3, lr_decay_freq=1, lr_decay_factor=1,
+                                        epsilon=0.01, alpha=a, activation='tanh')
+                        net.save_graph_layout()
+                        net.train(batch_size=32, epochs=15, val_freq=1000, val_size=200, norm_cap=False)
+                        net.save_model()
+                        sys.exit(0)
+                    count += 1
