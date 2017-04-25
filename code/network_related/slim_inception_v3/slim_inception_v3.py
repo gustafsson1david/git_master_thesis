@@ -148,11 +148,13 @@ class SlimInceptionV3(object):
         batch_pred = self.sess.run(y_pred, {normalized_im: image_batch})
         return batch_pred
 
-    def restore_model(self, checkpoint_dir):
+    def restore_model(self, timestamp):
         self.graph.as_default()
+        self.timestamp = timestamp
+        checkpoint_dir = './runs/'+timestamp+'/checkpoint/'
         new_saver = tf.train.import_meta_graph(checkpoint_dir+'model.meta')
         new_saver.restore(self.sess, tf.train.latest_checkpoint(checkpoint_dir))
-        tf.constant(checkpoint_dir, name='restored_model')
+        tf.constant(timestamp, name='restored_model')
         print('Model restored from {}'.format(checkpoint_dir))
 
     def save_graph_layout(self):
@@ -293,35 +295,165 @@ class SlimInceptionV3(object):
                 break
         print('')
 
+    def continue_training(self, batch_size=1, epochs=range(15, 25), val_freq=100, val_size=10, norm_cap=False):
+        self.graph.as_default()
+
+        # Write hyperparameters to file
+        with self.graph.device('/cpu:0'):
+            with open('./runs/' + self.timestamp + '/parameters', 'a+') as run_info:
+                params = locals()
+                print("Train parameters:")
+                run_info.write("Train parameters:\n")
+                for attr, value in params.items():
+                    if attr != 'self' and attr != 'run_info':
+                        print("{}={}".format(attr.upper(), value))
+                        run_info.write("{}={}\n".format(attr.upper(), value))
+                print("")
+                run_info.write("\n")
+
+        # Read images
+        train_image_path = '../../../data/train2014/'
+        train_image_list = os.listdir(train_image_path)
+        val_image_path = '../../../data/val2014/'
+        val_image_list = os.listdir(val_image_path)
+        # Read caption dictionaries
+        train_dict = np.load('../../../data/word2vec_train.npy').item()
+        val_dict = np.load('../../../data/word2vec_val.npy').item()
+
+        # Get variable handles
+        input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
+        normalized_im = self.graph.get_tensor_by_name('Preprocessing/normalized_im:0')
+        y = self.graph.get_tensor_by_name('Own/y:0')
+        train_step = self.graph.get_operation_by_name('Optimization/train_step')
+        phase = self.graph.get_tensor_by_name('Own/phase:0')
+        all_summaries = tf.summary.merge_all()
+
+        # Initialize writers
+        train_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/train/', flush_secs=20)
+        val_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/val/', flush_secs=20)
+
+        # Initialize saver
+        try:
+            os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
+        except FileExistsError:
+            pass
+        self.saver = tf.train.Saver(max_to_keep=1)
+
+        # Train
+        for e in epochs:
+            try:
+                print('Epoch {}'.format(e + 1))
+                if e > 0:
+                    random.shuffle(train_image_list)
+                    # Save checkpoint every epoch
+                    save_path = self.saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
+                    print('Trained model saved to {}'.format(save_path))
+
+                for i in range(len(train_image_list))[::batch_size]:
+                    image_batch = []
+                    caption_batch = []
+                    # Form batch and feed through
+                    for j in range(batch_size):
+                        try:
+                            temp_im = np.array(Image.open(train_image_path + train_image_list[i + j]))
+                            # If image has only one channel
+                            if np.ndim(temp_im) == 2:
+                                temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
+                            # Resize image
+                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
+                            image_batch.append(resized_temp_im[0])
+
+                            # Choose one of the five captions randomly
+                            r = random.randrange(len(train_dict[train_image_list[i + j]]))
+                            temp_caption = train_dict[train_image_list[i + j]][r]
+                            if norm_cap:
+                                caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
+                            else:
+                                caption_batch.append(temp_caption)
+                        except IndexError:
+                            pass
+
+                    caption_batch = np.stack(caption_batch, axis=0)
+                    image_batch = np.stack(image_batch, axis=0)
+                    [summaries, _] = self.sess.run([all_summaries, train_step],
+                                                   feed_dict={normalized_im: image_batch,
+                                                              y: caption_batch,
+                                                              phase: False})
+                    train_writer.add_summary(summary=summaries, global_step=e * len(train_image_list) + i)
+
+                    # Evaluate every val_freq:th step
+                    if i % val_freq == 0:
+                        val_image_batch = []
+                        val_caption_batch = []
+                        for j in range(val_size):
+                            temp_im = np.array(Image.open(val_image_path + val_image_list[j]))
+                            # If image has only one channel
+                            if np.ndim(temp_im) == 2:
+                                temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
+                            # Resize image
+                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
+                            val_image_batch.append(resized_temp_im[0])
+
+                            # Use first caption in validation set
+                            temp_caption = val_dict[val_image_list[j]][0]
+                            if norm_cap:
+                                val_caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
+                            else:
+                                val_caption_batch.append(temp_caption)
+
+                        val_caption_batch = np.stack(val_caption_batch, axis=0)
+                        val_image_batch = np.stack(val_image_batch, axis=0)
+                        summaries = self.sess.run(all_summaries,
+                                                  feed_dict={normalized_im: val_image_batch,
+                                                             y: val_caption_batch,
+                                                             phase: False})
+                        val_writer.add_summary(summaries, e * len(train_image_list) + i)
+                        print(i, end=' ', flush=True)
+                print('')
+            except KeyboardInterrupt:
+                print('')
+                break
+        print('')
+
 if __name__ == "__main__":
 
-    branch_path = ['InceptionV3/InceptionV3/Mixed_7b/concat:0',
-                   'InceptionV3/InceptionV3/Mixed_6d/concat:0',
-                   'InceptionV3/InceptionV3/Mixed_6a/concat:0']
-    layers_to_train = [[['all'],
-                        ['Mixed_7b', 'Mixed_7a', 'Mixed_6e'],
-                        []],
-                       [['all'],
-                        ['Mixed_6d', 'Mixed_6c', 'Mixed_6b'],
-                        []],
-                       [['all'],
-                        ['Mixed_6a', 'Mixed_5d', 'Mixed_5c'],
-                        []]]
-    own_layers = [1, 3]
-    alpha = [0, 0.95]
+    # branch_path = ['InceptionV3/InceptionV3/Mixed_7b/concat:0',
+    #                'InceptionV3/InceptionV3/Mixed_6d/concat:0',
+    #                'InceptionV3/InceptionV3/Mixed_6a/concat:0']
+    # layers_to_train = [[['all'],
+    #                     ['Mixed_7b', 'Mixed_7a', 'Mixed_6e'],
+    #                     []],
+    #                    [['all'],
+    #                     ['Mixed_6d', 'Mixed_6c', 'Mixed_6b'],
+    #                     []],
+    #                    [['all'],
+    #                     ['Mixed_6a', 'Mixed_5d', 'Mixed_5c'],
+    #                     []]]
+    # own_layers = [1, 3]
+    # alpha = [0, 0.95]
+    #
+    # count = 1
+    # for i, b in enumerate(branch_path):
+    #     for l in layers_to_train[i]:
+    #         for o in own_layers:
+    #             for a in alpha:
+    #                 if str(count) == sys.argv[1]:
+    #                     net = SlimInceptionV3()
+    #                     net.build_graph(branch_path=b, layers_to_train=l, own_layers=o,
+    #                                     init_learning_rate=1e-3, lr_decay_freq=1, lr_decay_factor=1,
+    #                                     epsilon=0.01, alpha=a, activation='tanh')
+    #                     net.save_graph_layout()
+    #                     net.train(batch_size=32, epochs=15, val_freq=1000, val_size=200, norm_cap=False)
+    #                     net.save_model()
+    #                     sys.exit(0)
+    #                 count += 1
 
     count = 1
-    for i, b in enumerate(branch_path):
-        for l in layers_to_train[i]:
-            for o in own_layers:
-                for a in alpha:
-                    if str(count) == sys.argv[1]:
-                        net = SlimInceptionV3()
-                        net.build_graph(branch_path=b, layers_to_train=l, own_layers=o,
-                                        init_learning_rate=1e-3, lr_decay_freq=1, lr_decay_factor=1,
-                                        epsilon=0.01, alpha=a, activation='tanh')
-                        net.save_graph_layout()
-                        net.train(batch_size=32, epochs=15, val_freq=1000, val_size=200, norm_cap=False)
-                        net.save_model()
-                        sys.exit(0)
-                    count += 1
+    for d in os.listdir('./runs'):
+        if str(count) == sys.argv[1]:
+            net = SlimInceptionV3()
+            net.restore_model(d)
+            net.continue_training(batch_size=32, epochs=range(15, 15+10), val_freq=1000, val_size=200, norm_cap=False)
+            net.save_model()
+            sys.exit(0)
+        count += 1
