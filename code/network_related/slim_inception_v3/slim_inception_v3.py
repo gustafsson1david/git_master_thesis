@@ -213,7 +213,7 @@ class SlimInceptionV3(object):
         # Initialize saver
         try:
             os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
-        except FileExistError:
+        except FileExistsError:
             pass
         self.saver = tf.train.Saver(max_to_keep=1)
 
