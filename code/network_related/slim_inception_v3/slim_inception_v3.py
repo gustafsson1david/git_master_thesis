@@ -274,7 +274,10 @@ class SlimInceptionV3(object):
 
                             # Use first caption in validation set
                             temp_caption = val_dict[val_image_list[j]][0]
-                            val_caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
+                            if norm_cap:
+                                val_caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
+                            else:
+                                val_caption_batch.append(temp_caption)
 
                         val_caption_batch = np.stack(val_caption_batch, axis=0)
                         val_image_batch = np.stack(val_image_batch, axis=0)
@@ -292,7 +295,7 @@ class SlimInceptionV3(object):
 
 if __name__ == "__main__":
 
-    branch_path = ['InceptionV3/InceptionV3/Mixed_6d/concat:0',
+    branch_path = ['InceptionV3/InceptionV3/Mixed_7b/concat:0',
                    'InceptionV3/InceptionV3/Mixed_6d/concat:0',
                    'InceptionV3/InceptionV3/Mixed_6a/concat:0']
     layers_to_train = [[['all'],
