@@ -25,9 +25,9 @@ class SlimInceptionV3(object):
 
         # Write parameters to file
         with self.graph.device('/cpu:0'):
-            if not os.path.exists('./runs/'+self.timestamp+'/'):
-                os.makedirs('./runs/'+self.timestamp+'/')
-            with open('./runs/'+self.timestamp+'/parameters', 'a+') as run_info:
+            if not os.path.exists('./code/network_related/slim_inception_v3/runs/'+self.timestamp+'/'):
+                os.makedirs('./code/network_related/slim_inception_v3/runs/'+self.timestamp+'/')
+            with open('./code/network_related/slim_inception_v3/runs/'+self.timestamp+'/parameters', 'a+') as run_info:
                 params = locals()
                 print("Graph parameters:")
                 run_info.write("Graph parameters:\n")
@@ -151,18 +151,20 @@ class SlimInceptionV3(object):
     def restore_model(self, timestamp):
         self.graph.as_default()
         self.timestamp = timestamp
-        checkpoint_dir = './runs/'+timestamp+'/checkpoint/'
+        checkpoint_dir = './code/network_related/slim_inception_v3/runs/'+timestamp+'/checkpoint/'
         new_saver = tf.train.import_meta_graph(checkpoint_dir+'model.meta')
         new_saver.restore(self.sess, tf.train.latest_checkpoint(checkpoint_dir))
         tf.constant(timestamp, name='restored_model')
         print('Model restored from {}'.format(checkpoint_dir))
 
     def save_graph_layout(self):
-        tf.summary.FileWriter('./runs/' + self.timestamp + '/graph/', graph=self.graph)
-        print('Graph layout saved to {}'.format('./runs/' + self.timestamp + '/graph/'))
+        tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/graph/', graph=self.graph)
+        print('Graph layout saved to {}'.format('./code/network_related/slim_inception_v3/runs/'
+                                                + self.timestamp + '/graph/'))
 
     def save_model(self):
-        save_path = self.saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
+        save_path = self.saver.save(self.sess, './code/network_related/slim_inception_v3/runs/' + self.timestamp
+                                    + '/checkpoint/model')
         print('Trained model saved to {}'.format(save_path))
 
     def train(self, batch_size=1, epochs=1, val_freq=100, val_size=10, norm_cap=False):
@@ -170,7 +172,7 @@ class SlimInceptionV3(object):
 
         # Write hyperparameters to file
         with self.graph.device('/cpu:0'):
-            with open('./runs/' + self.timestamp + '/parameters', 'a+') as run_info:
+            with open('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/parameters', 'a+') as run_info:
                 params = locals()
                 print("Train parameters:")
                 run_info.write("Train parameters:\n")
@@ -182,19 +184,19 @@ class SlimInceptionV3(object):
                 run_info.write("\n")
 
         # Read images
-        train_image_path = '../../../data/train2014/'
+        train_image_path = './data/train2014/'
         train_image_list = os.listdir(train_image_path)
-        val_image_path = '../../../data/val2014/'
+        val_image_path = './data/val2014/'
         val_image_list = os.listdir(val_image_path)
         # Read caption dictionaries
-        train_dict = np.load('../../../data/word2vec_train.npy').item()
-        val_dict = np.load('../../../data/word2vec_val.npy').item()
+        train_dict = np.load('./data/word2vec_train.npy').item()
+        val_dict = np.load('./data/word2vec_val.npy').item()
 
         # Initialize variables
         slim_var_names = [s[0] for s in tf.contrib.framework.list_variables(
-            checkpoint_dir='../../../data/inception-2016-08-28/inception_v3.ckpt')][:-1]
+            checkpoint_dir='./data/inception-2016-08-28/inception_v3.ckpt')][:-1]
         slim_saver = tf.train.Saver(var_list=[v for v in tf.global_variables() if v.name[:-2] in slim_var_names])
-        slim_saver.restore(self.sess, "../../../data/inception-2016-08-28/inception_v3.ckpt")
+        slim_saver.restore(self.sess, "./data/inception-2016-08-28/inception_v3.ckpt")
         uninitialized = self.sess.run(tf.report_uninitialized_variables())
         uninitialized = [str(v)[2:-1] + ':0' for v in uninitialized]
         uninitialized = [v for v in tf.global_variables() if v.name in uninitialized]
@@ -209,12 +211,14 @@ class SlimInceptionV3(object):
         all_summaries = tf.summary.merge_all()
 
         # Initialize writers
-        train_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/train/', flush_secs=20)
-        val_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/val/', flush_secs=20)
+        train_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp +
+                                             '/sums/train/', flush_secs=20)
+        val_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp +
+                                           '/sums/val/', flush_secs=20)
 
         # Initialize saver
         try:
-            os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
+            os.mkdir('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/checkpoint/')
         except FileExistsError:
             pass
         self.saver = tf.train.Saver(max_to_keep=1)
@@ -226,7 +230,8 @@ class SlimInceptionV3(object):
                 if e > 0:
                     random.shuffle(train_image_list)
                     # Save checkpoint every epoch
-                    save_path = self.saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
+                    save_path = self.saver.save(self.sess, './code/network_related/slim_inception_v3/runs/'
+                                                + self.timestamp + '/checkpoint/model')
                     print('Trained model saved to {}'.format(save_path))
 
                 for i in range(len(train_image_list))[::batch_size]:
@@ -300,7 +305,7 @@ class SlimInceptionV3(object):
 
         # Write hyperparameters to file
         with self.graph.device('/cpu:0'):
-            with open('./runs/' + self.timestamp + '/parameters', 'a+') as run_info:
+            with open('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/parameters', 'a+') as run_info:
                 params = locals()
                 print("Train parameters:")
                 run_info.write("Train parameters:\n")
@@ -312,13 +317,13 @@ class SlimInceptionV3(object):
                 run_info.write("\n")
 
         # Read images
-        train_image_path = '../../../data/train2014/'
+        train_image_path = './data/train2014/'
         train_image_list = os.listdir(train_image_path)
-        val_image_path = '../../../data/val2014/'
+        val_image_path = './data/val2014/'
         val_image_list = os.listdir(val_image_path)
         # Read caption dictionaries
-        train_dict = np.load('../../../data/word2vec_train.npy').item()
-        val_dict = np.load('../../../data/word2vec_val.npy').item()
+        train_dict = np.load('./data/word2vec_train.npy').item()
+        val_dict = np.load('./data/word2vec_val.npy').item()
 
         # Get variable handles
         input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
@@ -329,12 +334,12 @@ class SlimInceptionV3(object):
         all_summaries = tf.summary.merge_all()
 
         # Initialize writers
-        train_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/train/', flush_secs=20)
-        val_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/val/', flush_secs=20)
+        train_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/sums/train/', flush_secs=20)
+        val_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/sums/val/', flush_secs=20)
 
         # Initialize saver
         try:
-            os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
+            os.mkdir('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/checkpoint/')
         except FileExistsError:
             pass
         self.saver = tf.train.Saver(max_to_keep=1)
@@ -346,7 +351,7 @@ class SlimInceptionV3(object):
                 if e > 0:
                     random.shuffle(train_image_list)
                     # Save checkpoint every epoch
-                    save_path = self.saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
+                    save_path = self.saver.save(self.sess, './code/network_related/slim_inception_v3/runs/' + self.timestamp + '/checkpoint/model')
                     print('Trained model saved to {}'.format(save_path))
 
                 for i in range(len(train_image_list))[::batch_size]:
@@ -449,7 +454,7 @@ if __name__ == "__main__":
     #                 count += 1
 
     count = 1
-    for d in os.listdir('./runs'):
+    for d in os.listdir('./code/network_related/slim_inception_v3/runs'):
         if str(count) == sys.argv[1]:
             net = SlimInceptionV3()
             net.restore_model(d)
