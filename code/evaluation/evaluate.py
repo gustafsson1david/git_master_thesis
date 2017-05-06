@@ -81,7 +81,7 @@ class Evaluation(object):
             ]
             predictions = model.predict(list_images)
             image_matrix[:, (20 * i):(20 * (i + 1))] = predictions.transpose()
-            print('Done predicting: ' + explanatory_word)
+            # print('Done predicting: ' + explanatory_word)
 
         # Calculate MAP with the 2 first in each category as query.
         image_map = 0.0
@@ -102,13 +102,13 @@ class Evaluation(object):
                 cosine, 0, image_matrix, query_vec
             )
             ap_2 = self.ap_func(dists, target)
-            if ((ap_1 + ap_2) / 2.0) > 0.014916813281349084:
-                print(
-                    'AP, ' + group_names[i] + ': ' + str((ap_1 + ap_2) / 2.0) +
-                    '     Better than random!'
-                )
-            else:
-                print('AP, ' + group_names[i] + ': ' + str((ap_1 + ap_2) / 2.0))
+            # if ((ap_1 + ap_2) / 2.0) > 0.014916813281349084:
+            #     print(
+            #         'AP, ' + group_names[i] + ': ' + str((ap_1 + ap_2) / 2.0) +
+            #         '     Better than random!'
+            #     )
+            # else:
+            #     print('AP, ' + group_names[i] + ': ' + str((ap_1 + ap_2) / 2.0))
             image_map += (ap_1 + ap_2)
 
         image_map /= (2.0 * nr_groups)
@@ -130,10 +130,10 @@ class Evaluation(object):
                 cosine, 0, word_matrix, query_vec
             )
             ap = self.ap_func(dists, target)
-            print(
-                'AP, ' + target_name + '(' + word_list[target[0]]
-                + '): ' + str(ap)
-            )
+            # print(
+            #     'AP, ' + target_name + '(' + word_list[target[0]]
+            #      + '): ' + str(ap)
+            # )
             word_map += ap
         word_map /= float(sum_k_rows.shape[0])
         return (image_map, word_map)

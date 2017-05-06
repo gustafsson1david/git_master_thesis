@@ -145,7 +145,7 @@ class SlimInceptionV3(object):
             image_batch.append(resized_temp_im[0])
 
         # Get prediction
-        batch_pred = self.sess.run(y_pred, {normalized_im: image_batch})
+        batch_pred = self.sess.run(y_pred, {normalized_im: image_batch, phase: False})
         return batch_pred
 
     def restore_model(self, timestamp):
