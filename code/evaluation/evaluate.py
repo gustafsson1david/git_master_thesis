@@ -38,7 +38,10 @@ class Evaluation(object):
             uni_idx = uni_idx[1:]
         precision = np.array(range(1, (len(target_args) + 1))) / (uni_idx + 1)
         ap_score = precision.sum() / len(target_args)
-        return ap_score
+        if ap_score > 0.3:
+            print(ap_score)
+            print(uni_idx)
+        return ap_score, hit
 
     def evaluate(self, model, path_to_eval='./data/sun/', path_to_words='./data/new_scene_names.npy', k=5):
         """
@@ -84,16 +87,18 @@ class Evaluation(object):
             # print('Done predicting: ' + explanatory_word)
 
         # Calculate MAP with the 2 first in each category as query.
+        image_hits = np.zeros(nr_groups * 20 - 1)
         image_map = 0.0
         for i in range(nr_groups):
             target = list(range(20 * i, 20 * (i + 1)))
             del target[0]
+            print(list_directories[i])
             # Query 1
             query_vec = image_matrix[:, (20 * i)]
             dists = np.apply_along_axis(
                 cosine, 0, image_matrix, query_vec
             )
-            ap_1 = self.ap_func(dists, target)
+            ap_1, hit_1 = self.ap_func(dists, target)
             # Query 2
             target = list(range(20 * i, 20 * (i + 1)))
             del target[1]
@@ -101,7 +106,7 @@ class Evaluation(object):
             dists = np.apply_along_axis(
                 cosine, 0, image_matrix, query_vec
             )
-            ap_2 = self.ap_func(dists, target)
+            ap_2, hit_2 = self.ap_func(dists, target)
             # if ((ap_1 + ap_2) / 2.0) > 0.014916813281349084:
             #     print(
             #         'AP, ' + group_names[i] + ': ' + str((ap_1 + ap_2) / 2.0) +
@@ -110,6 +115,7 @@ class Evaluation(object):
             # else:
             #     print('AP, ' + group_names[i] + ': ' + str((ap_1 + ap_2) / 2.0))
             image_map += (ap_1 + ap_2)
+            image_hits = image_hits + hit_1 + hit_2
 
         image_map /= (2.0 * nr_groups)
 
@@ -122,6 +128,7 @@ class Evaluation(object):
             ]
         )
         word_map = 0.0
+        word_hits = np.zeros(nr_groups)
         for i in range(sum_k_rows.shape[0]):
             target_name = list_directories[int((i * k) / 20)]
             target = [dic_keys[target_name]]
@@ -129,14 +136,15 @@ class Evaluation(object):
             dists = np.apply_along_axis(
                 cosine, 0, word_matrix, query_vec
             )
-            ap = self.ap_func(dists, target)
+            ap, hit = self.ap_func(dists, target)
             # print(
             #     'AP, ' + target_name + '(' + word_list[target[0]]
             #      + '): ' + str(ap)
             # )
             word_map += ap
+            word_hits = word_hits + hit
         word_map /= float(sum_k_rows.shape[0])
-        return (image_map, word_map)
+        return (image_map, word_map, image_hits, word_hits)
 
 if __name__ == "__main__":
     count = 1
