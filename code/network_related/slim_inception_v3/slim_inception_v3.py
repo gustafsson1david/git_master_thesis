@@ -84,6 +84,7 @@ class SlimInceptionV3(object):
                         print("'" + activation + "' is not a valid activation function. Falling back to 'tanh'.")
                         z.append(tf.nn.tanh(n[i], name='tanh_' + str(i)))
 
+            # Log relevant metrics at output layer
             y_pred = tf.identity(a[-1], name='y_pred')
             with tf.name_scope('L2_distance'):
                 l2_dist = tf.reduce_mean(tf.sqrt(tf.reduce_sum(tf.square(y - y_pred), axis=1)), name='l2_dist')
@@ -105,7 +106,7 @@ class SlimInceptionV3(object):
                                                      tf.nn.l2_normalize(y_pred, dim=1), dim=1)
                 tf.summary.scalar(name='mean_diff', tensor=mean_diff)
 
-        # Define variables to train
+        # Define trainable variables
         if layers_to_train == ['all']:
             variables_to_train = tf.trainable_variables()
         else:
@@ -127,6 +128,7 @@ class SlimInceptionV3(object):
             train_step = adam.minimize(mixed_dist, var_list=variables_to_train, global_step=global_step,
                                        name='train_step')
 
+    # Get vector embeddings after training
     def predict(self, path_list):
         # Get variable handles
         input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
@@ -149,6 +151,7 @@ class SlimInceptionV3(object):
         batch_pred = self.sess.run(y_pred, {normalized_im: image_batch, phase: False})
         return batch_pred
 
+    # Restore model from meta file and checkpoint
     def restore_model(self, timestamp):
         self.graph.as_default()
         self.timestamp = timestamp
@@ -158,22 +161,27 @@ class SlimInceptionV3(object):
         tf.constant(timestamp, name='restored_model')
         print('Model restored from {}'.format(checkpoint_dir))
 
+    # Save graph layout separately
     def save_graph_layout(self):
-        tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/graph/', graph=self.graph)
+        tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/graph/',
+                              graph=self.graph)
         print('Graph layout saved to {}'.format('./code/network_related/slim_inception_v3/runs/'
                                                 + self.timestamp + '/graph/'))
 
+    # Save model to meta file and checkpoint
     def save_model(self):
         save_path = self.saver.save(self.sess, './code/network_related/slim_inception_v3/runs/' + self.timestamp
                                     + '/checkpoint/model')
         print('Trained model saved to {}'.format(save_path))
 
-    def train(self, batch_size=1, epochs=1, val_freq=100, val_size=10, norm_cap=False):
+    # Train model
+    def train(self, batch_size=1, epochs=range(0, 15), val_freq=100, val_size=10, norm_cap=False):
         self.graph.as_default()
 
         # Write hyperparameters to file
         with self.graph.device('/cpu:0'):
-            with open('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/parameters', 'a+') as run_info:
+            with open('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/parameters',
+                      'a+') as run_info:
                 params = locals()
                 print("Train parameters:")
                 run_info.write("Train parameters:\n")
@@ -193,15 +201,16 @@ class SlimInceptionV3(object):
         train_dict = np.load('./data/word2vec_train.npy').item()
         val_dict = np.load('./data/word2vec_val.npy').item()
 
-        # Initialize variables
-        slim_var_names = [s[0] for s in tf.contrib.framework.list_variables(
-            checkpoint_dir='./data/inception-2016-08-28/inception_v3.ckpt')][:-1]
-        slim_saver = tf.train.Saver(var_list=[v for v in tf.global_variables() if v.name[:-2] in slim_var_names])
-        slim_saver.restore(self.sess, "./data/inception-2016-08-28/inception_v3.ckpt")
-        uninitialized = self.sess.run(tf.report_uninitialized_variables())
-        uninitialized = [str(v)[2:-1] + ':0' for v in uninitialized]
-        uninitialized = [v for v in tf.global_variables() if v.name in uninitialized]
-        self.sess.run(tf.variables_initializer(var_list=uninitialized))
+        # Initialize variables if not continuing earlier training session
+        if not epochs[0] > 0:
+            slim_var_names = [s[0] for s in tf.contrib.framework.list_variables(
+                checkpoint_dir='./data/inception-2016-08-28/inception_v3.ckpt')][:-1]
+            slim_saver = tf.train.Saver(var_list=[v for v in tf.global_variables() if v.name[:-2] in slim_var_names])
+            slim_saver.restore(self.sess, "./data/inception-2016-08-28/inception_v3.ckpt")
+            uninitialized = self.sess.run(tf.report_uninitialized_variables())
+            uninitialized = [str(v)[2:-1] + ':0' for v in uninitialized]
+            uninitialized = [v for v in tf.global_variables() if v.name in uninitialized]
+            self.sess.run(tf.variables_initializer(var_list=uninitialized))
 
         # Get variable handles
         input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
@@ -212,10 +221,10 @@ class SlimInceptionV3(object):
         all_summaries = tf.summary.merge_all()
 
         # Initialize writers
-        train_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp +
-                                             '/sums/train/', flush_secs=20)
-        val_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp +
-                                           '/sums/val/', flush_secs=20)
+        train_writer = tf.summary.FileWriter(
+            './code/network_related/slim_inception_v3/runs/' + self.timestamp + '/sums/train/', flush_secs=20)
+        val_writer = tf.summary.FileWriter(
+            './code/network_related/slim_inception_v3/runs/' + self.timestamp + '/sums/val/', flush_secs=20)
 
         # Initialize saver
         try:
@@ -224,273 +233,20 @@ class SlimInceptionV3(object):
             pass
         self.saver = tf.train.Saver(max_to_keep=1)
 
-        # Train
-        for e in range(epochs):
-            try:
-                print('Epoch {}'.format(e + 1))
-                if e > 0:
-                    random.shuffle(train_image_list)
-                    # Save checkpoint every epoch
-                    save_path = self.saver.save(self.sess, './code/network_related/slim_inception_v3/runs/'
-                                                + self.timestamp + '/checkpoint/model')
-                    print('Trained model saved to {}'.format(save_path))
-
-                for i in range(len(train_image_list))[::batch_size]:
-                    image_batch = []
-                    caption_batch = []
-                    # Form batch and feed through
-                    for j in range(batch_size):
-                        try:
-                            temp_im = np.array(Image.open(train_image_path + train_image_list[i + j]))
-                            # If image has only one channel
-                            if np.ndim(temp_im) == 2:
-                                temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
-                            # Resize image
-                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
-                            image_batch.append(resized_temp_im[0])
-
-                            # Choose one of the five captions randomly
-                            r = random.randrange(len(train_dict[train_image_list[i + j]]))
-                            temp_caption = train_dict[train_image_list[i + j]][r]
-                            if norm_cap:
-                                caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
-                            else:
-                                caption_batch.append(temp_caption)
-                        except IndexError:
-                            pass
-
-                    caption_batch = np.stack(caption_batch, axis=0)
-                    image_batch = np.stack(image_batch, axis=0)
-                    [summaries, _] = self.sess.run([all_summaries, train_step],
-                                                   feed_dict={normalized_im: image_batch,
-                                                              y: caption_batch,
-                                                              phase: False})
-                    train_writer.add_summary(summary=summaries, global_step=e * len(train_image_list) + i)
-
-                    # Evaluate every val_freq:th step
-                    if i % val_freq == 0:
-                        val_image_batch = []
-                        val_caption_batch = []
-                        for j in range(val_size):
-                            temp_im = np.array(Image.open(val_image_path + val_image_list[j]))
-                            # If image has only one channel
-                            if np.ndim(temp_im) == 2:
-                                temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
-                            # Resize image
-                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
-                            val_image_batch.append(resized_temp_im[0])
-
-                            # Use first caption in validation set
-                            temp_caption = val_dict[val_image_list[j]][0]
-                            if norm_cap:
-                                val_caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
-                            else:
-                                val_caption_batch.append(temp_caption)
-
-                        val_caption_batch = np.stack(val_caption_batch, axis=0)
-                        val_image_batch = np.stack(val_image_batch, axis=0)
-                        summaries = self.sess.run(all_summaries,
-                                                  feed_dict={normalized_im: val_image_batch,
-                                                             y: val_caption_batch,
-                                                             phase: False})
-                        val_writer.add_summary(summaries, e * len(train_image_list) + i)
-                        print(i, end=' ', flush=True)
-                print('')
-            except KeyboardInterrupt:
-                print('')
-                break
-        print('')
-
-    def train_all_data(self, batch_size=1, epochs=1, val_freq=100, val_size=10, norm_cap=False):
-        self.graph.as_default()
-
-        # Write hyperparameters to file
-        with self.graph.device('/cpu:0'):
-            with open('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/parameters', 'a+') as run_info:
-                params = locals()
-                print("Train parameters:")
-                run_info.write("Train parameters:\n")
-                for attr, value in params.items():
-                    if attr != 'self' and attr != 'run_info':
-                        print("{}={}".format(attr.upper(), value))
-                        run_info.write("{}={}\n".format(attr.upper(), value))
-                print("")
-                run_info.write("\n")
-
-        # Read images
-        train_image_path = './data/train2014/'
-        train_image_list = [train_image_path + i for i in os.listdir(train_image_path)]
-        val_image_path = './data/val2014/'
-        val_image_list = [val_image_path + i for i in os.listdir(val_image_path)]
-        train_image_list = train_image_list + val_image_list[:-val_size]
-        val_image_list = val_image_list[-val_size:]
-        # Read caption dictionaries
-        train_dict = np.load('./data/word2vec_train.npy').item()
-        val_dict = np.load('./data/word2vec_val.npy').item()
-        train_dict = {**train_dict, **val_dict}
-
-        # Initialize variables
-        slim_var_names = [s[0] for s in tf.contrib.framework.list_variables(
-            checkpoint_dir='./data/inception-2016-08-28/inception_v3.ckpt')][:-1]
-        slim_saver = tf.train.Saver(var_list=[v for v in tf.global_variables() if v.name[:-2] in slim_var_names])
-        slim_saver.restore(self.sess, "./data/inception-2016-08-28/inception_v3.ckpt")
-        uninitialized = self.sess.run(tf.report_uninitialized_variables())
-        uninitialized = [str(v)[2:-1] + ':0' for v in uninitialized]
-        uninitialized = [v for v in tf.global_variables() if v.name in uninitialized]
-        self.sess.run(tf.variables_initializer(var_list=uninitialized))
-
-        # Get variable handles
-        input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
-        normalized_im = self.graph.get_tensor_by_name('Preprocessing/normalized_im:0')
-        y = self.graph.get_tensor_by_name('Own/y:0')
-        train_step = self.graph.get_operation_by_name('Optimization/train_step')
-        phase = self.graph.get_tensor_by_name('Own/phase:0')
-        all_summaries = tf.summary.merge_all()
-
-        # Initialize writers
-        train_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp +
-                                             '/sums/train/', flush_secs=20)
-        val_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp +
-                                           '/sums/val/', flush_secs=20)
-
-        # Initialize saver
-        try:
-            os.mkdir('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/checkpoint/')
-        except FileExistsError:
-            pass
-        self.saver = tf.train.Saver(max_to_keep=1)
-
-        # Train
-        for e in range(epochs):
-            try:
-                print('Epoch {}'.format(e + 1))
-                if e > 0:
-                    random.shuffle(train_image_list)
-                    # Save checkpoint every epoch
-                    save_path = self.saver.save(self.sess, './code/network_related/slim_inception_v3/runs/'
-                                                + self.timestamp + '/checkpoint/model')
-                    print('Trained model saved to {}'.format(save_path))
-
-                for i in range(len(train_image_list))[::batch_size]:
-                    image_batch = []
-                    caption_batch = []
-                    # Form batch and feed through
-                    for j in range(batch_size):
-                        try:
-                            temp_im = np.array(Image.open(train_image_list[i + j]))
-                            # If image has only one channel
-                            if np.ndim(temp_im) == 2:
-                                temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
-                            # Resize image
-                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
-                            image_batch.append(resized_temp_im[0])
-
-                            # Choose one of the five captions randomly
-                            r = random.randrange(len(train_dict[re.findall('COCO.+.jpg',train_image_list[i + j])[0]]))
-                            temp_caption = train_dict[re.findall('COCO.+.jpg',train_image_list[i + j])[0]][r]
-                            if norm_cap:
-                                caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
-                            else:
-                                caption_batch.append(temp_caption)
-                        except IndexError:
-                            pass
-
-                    caption_batch = np.stack(caption_batch, axis=0)
-                    image_batch = np.stack(image_batch, axis=0)
-                    [summaries, _] = self.sess.run([all_summaries, train_step],
-                                                   feed_dict={normalized_im: image_batch,
-                                                              y: caption_batch,
-                                                              phase: False})
-                    train_writer.add_summary(summary=summaries, global_step=e * len(train_image_list) + i)
-
-                    # Evaluate every val_freq:th step
-                    if i % val_freq == 0:
-                        val_image_batch = []
-                        val_caption_batch = []
-                        for j in range(val_size):
-                            temp_im = np.array(Image.open(val_image_list[j]))
-                            # If image has only one channel
-                            if np.ndim(temp_im) == 2:
-                                temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
-                            # Resize image
-                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
-                            val_image_batch.append(resized_temp_im[0])
-
-                            # Use first caption in validation set
-                            temp_caption = val_dict[re.findall('COCO.+.jpg',val_image_list[j])[0]][0]
-                            if norm_cap:
-                                val_caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
-                            else:
-                                val_caption_batch.append(temp_caption)
-
-                        val_caption_batch = np.stack(val_caption_batch, axis=0)
-                        val_image_batch = np.stack(val_image_batch, axis=0)
-                        summaries = self.sess.run(all_summaries,
-                                                  feed_dict={normalized_im: val_image_batch,
-                                                             y: val_caption_batch,
-                                                             phase: False})
-                        val_writer.add_summary(summaries, e * len(train_image_list) + i)
-                        print(i, end=' ', flush=True)
-                print('')
-            except KeyboardInterrupt:
-                print('')
-                break
-        print('')
-
-    def continue_training(self, batch_size=1, epochs=range(15, 25), val_freq=100, val_size=10, norm_cap=False):
-        self.graph.as_default()
-
-        # Write hyperparameters to file
-        with self.graph.device('/cpu:0'):
-            with open('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/parameters', 'a+') as run_info:
-                params = locals()
-                print("Train parameters:")
-                run_info.write("Train parameters:\n")
-                for attr, value in params.items():
-                    if attr != 'self' and attr != 'run_info':
-                        print("{}={}".format(attr.upper(), value))
-                        run_info.write("{}={}\n".format(attr.upper(), value))
-                print("")
-                run_info.write("\n")
-
-        # Read images
-        train_image_path = './data/train2014/'
-        train_image_list = os.listdir(train_image_path)
-        val_image_path = './data/val2014/'
-        val_image_list = os.listdir(val_image_path)
-        # Read caption dictionaries
-        train_dict = np.load('./data/word2vec_train.npy').item()
-        val_dict = np.load('./data/word2vec_val.npy').item()
-
-        # Get variable handles
-        input_im = self.graph.get_tensor_by_name('Preprocessing/convert_image/Cast:0')
-        normalized_im = self.graph.get_tensor_by_name('Preprocessing/normalized_im:0')
-        y = self.graph.get_tensor_by_name('Own/y:0')
-        train_step = self.graph.get_operation_by_name('Optimization/train_step')
-        phase = self.graph.get_tensor_by_name('Own/phase:0')
-        all_summaries = tf.summary.merge_all()
-
-        # Initialize writers
-        train_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/sums/train/', flush_secs=20)
-        val_writer = tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/sums/val/', flush_secs=20)
-
-        # Initialize saver
-        try:
-            os.mkdir('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/checkpoint/')
-        except FileExistsError:
-            pass
-        self.saver = tf.train.Saver(max_to_keep=1)
-
-        # Train
+        # Train loop
         for e in epochs:
             try:
                 print('Epoch {}'.format(e + 1))
                 if e > 0:
+                    # Shuffle training samples for each epoch
                     random.shuffle(train_image_list)
                     # Save checkpoint every epoch
-                    save_path = self.saver.save(self.sess, './code/network_related/slim_inception_v3/runs/' + self.timestamp + '/checkpoint/model')
+                    save_path = self.saver.save(self.sess,
+                                                './code/network_related/slim_inception_v3/runs/'
+                                                + self.timestamp + '/checkpoint/model')
                     print('Trained model saved to {}'.format(save_path))
 
+                # Perform minibatch training
                 for i in range(len(train_image_list))[::batch_size]:
                     image_batch = []
                     caption_batch = []
@@ -514,9 +270,10 @@ class SlimInceptionV3(object):
                                 caption_batch.append(temp_caption)
                         except IndexError:
                             pass
-
                     caption_batch = np.stack(caption_batch, axis=0)
                     image_batch = np.stack(image_batch, axis=0)
+
+                    # Run actual training op and write summary
                     [summaries, _] = self.sess.run([all_summaries, train_step],
                                                    feed_dict={normalized_im: image_batch,
                                                               y: caption_batch,
@@ -552,6 +309,8 @@ class SlimInceptionV3(object):
                         val_writer.add_summary(summaries, e * len(train_image_list) + i)
                         print(i, end=' ', flush=True)
                 print('')
+
+            # Makes it possible to interrupt training in the middle
             except KeyboardInterrupt:
                 print('')
                 break
@@ -559,11 +318,12 @@ class SlimInceptionV3(object):
 
 if __name__ == "__main__":
 
+    # Define the 36 models
     branch_path = ['InceptionV3/InceptionV3/Mixed_7b/concat:0',
                    'InceptionV3/InceptionV3/Mixed_6d/concat:0',
                    'InceptionV3/InceptionV3/Mixed_6a/concat:0']
     layers_to_train = [[['all'],
-                        ['Mixed_7b', 'Mixed_7a', 'Mixed_6e', 'Mixed_6d', 'Mixed_6c'],
+                        ['Mixed_7b', 'Mixed_7a', 'Mixed_6e'],
                         []],
                        [['all'],
                         ['Mixed_6d', 'Mixed_6c', 'Mixed_6b'],
@@ -571,9 +331,10 @@ if __name__ == "__main__":
                        [['all'],
                         ['Mixed_6a', 'Mixed_5d', 'Mixed_5c'],
                         []]]
-    own_layers = [1, 2]
+    own_layers = [1, 3]
     alpha = [0, 0.95]
-    
+
+    # Loop through models externally and stop at the right one
     count = 1
     for i, b in enumerate(branch_path):
         for l in layers_to_train[i]:
@@ -585,7 +346,7 @@ if __name__ == "__main__":
                                         init_learning_rate=1e-3, lr_decay_freq=1, lr_decay_factor=1,
                                         epsilon=0.01, alpha=a, activation='tanh')
                         net.save_graph_layout()
-                        net.train_all_data(batch_size=32, epochs=100, val_freq=1000, val_size=200, norm_cap=False)
+                        net.train(batch_size=32, epochs=range(0, 15), val_freq=1000, val_size=200, norm_cap=False)
                         net.save_model()
                         sys.exit(0)
                     count += 1
