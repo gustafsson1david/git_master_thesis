@@ -128,6 +128,28 @@ class SlimInceptionV3(object):
             train_step = adam.minimize(mixed_dist, var_list=variables_to_train, global_step=global_step,
                                        name='train_step')
 
+    # Create and save vectors for set of images
+    def create_image_space(self, path='./data/val2014/'):
+        # Create empty vector space
+        new_vec_dict = {}
+        # Fill vector space
+        filename_list = os.listdir(path)
+        for i in range(len(filename_list))[::100]:
+            try:
+                # Form batch and feed through
+                image_batch = [path + filename_list[i + j] for j in range(100)]
+                temp_return = net.predict(image_batch)
+                for j in range(len(temp_return)):
+                    new_vec_dict[filename_list[i + j]] = temp_return[j, :]
+                print(i + 1, end=' ')
+            except KeyboardInterrupt:
+                break
+
+        # Save image space
+        save_path = './data/image_space_' + self.timestamp + '.npy'
+        np.save(save_path, new_vec_dict)
+        print('\n\nImage space saved to {}'.format(save_path))
+
     # Get vector embeddings after training
     def predict(self, path_list):
         # Get variable handles
