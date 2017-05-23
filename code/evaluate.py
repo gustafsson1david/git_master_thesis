@@ -68,7 +68,7 @@ class Evaluation(object):
         nr_groups = len(list_directories)
         group_names = list_directories
         image_matrix = np.zeros([300, 20 * nr_groups])
-        dic_keys = {j:i for i,j in enumerate(list(group_vecs.keys()))}
+        dic_keys = {j: i for i, j in enumerate(list(group_vecs.keys()))}
 
         word_matrix = np.zeros([300, nr_groups])
         word_list = []
@@ -80,8 +80,7 @@ class Evaluation(object):
             list_images = os.listdir(path_to_eval + explanatory_word + '/')
             list_images = [
                 path_to_eval + explanatory_word + '/' + image
-                for image in list_images if image != '.DS_Store'
-            ]
+                for image in list_images if image != '.DS_Store']
             predictions = model.predict(list_images)
             image_matrix[:, (20 * i):(20 * (i + 1))] = predictions.transpose()
 
@@ -111,12 +110,9 @@ class Evaluation(object):
 
         # Split each group in subsets of k images, and find nearest explanatory
         # word to the mean vector of the k images.
-        sum_k_rows = np.array(
-            [
+        sum_k_rows = np.array([
                 image_matrix[:, (k * n):(k * n + k)].sum(1)
-                for n in range(int(image_matrix.shape[1] / k))
-            ]
-        )
+                for n in range(int(image_matrix.shape[1] / k))])
         word_map = 0.0
         for i in range(sum_k_rows.shape[0]):
             target_name = list_directories[int((i * k) / 20)]
@@ -132,22 +128,23 @@ class Evaluation(object):
         return (image_map, word_map)
 
 if __name__ == "__main__":
-    count = 1
-    for d in os.listdir('./code/network_related/slim_inception_v3/runs'):
-        if str(count) == sys.argv[1]:
-            print(d)
-            net = SlimInceptionV3()
-            net.restore_model(d)
-            evaluator = Evaluation()
-            map_score = evaluator.evaluate(net)
 
-            # Write map_score to file
-            with open('./code/network_related/slim_inception_v3/runs/' + d + '/parameters',
-                      'a+') as run_info:
-                print('Mean Average Precision:')
-                run_info.write('Mean Average Precision:\n')
-                print('IMAGE_RETRIEVAL={}'.format(map_score[0]))
-                run_info.write('IMAGE_RETRIEVAL={}\n'.format(map_score[0]))
-                print('SIMILARITY_MOTIVATION={}'.format(map_score[1]))
-                run_info.write('SIMILARITY_MOTIVATION={}\n\n'.format(map_score[1]))
-        count += 1
+    # Define model to evaluate
+    timestamp = '20170415-1810'
+
+    # Restore model
+    net = SlimInceptionV3()
+    net.restore_model(timestamp)
+
+    # Evaluate
+    evaluator = Evaluation()
+    map_score = evaluator.evaluate(net)
+
+    # Write results to file
+    with open('./runs/' + timestamp + '/results', 'a+') as run_info:
+        print('Mean Average Precision:')
+        run_info.write('Mean Average Precision:\n')
+        print('IMAGE_RETRIEVAL={}'.format(map_score[0]))
+        run_info.write('IMAGE_RETRIEVAL={}\n'.format(map_score[0]))
+        print('SIMILARITY_MOTIVATION={}'.format(map_score[1]))
+        run_info.write('SIMILARITY_MOTIVATION={}\n\n'.format(map_score[1]))

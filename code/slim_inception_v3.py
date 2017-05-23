@@ -4,11 +4,11 @@ import numpy as np
 import random
 import time
 from PIL import Image
+from scipy.spatial.distance import cosine
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 from tensorflow.contrib.slim.python.slim.nets.inception_v3 import inception_v3
 from tensorflow.contrib.slim.python.slim.nets.inception_v3 import inception_v3_arg_scope
-import re
 
 
 class SlimInceptionV3(object):
@@ -25,19 +25,18 @@ class SlimInceptionV3(object):
         self.graph.as_default()
 
         # Write parameters to file
-        with self.graph.device('/cpu:0'):
-            if not os.path.exists('./code/network_related/slim_inception_v3/runs/'+self.timestamp+'/'):
-                os.makedirs('./code/network_related/slim_inception_v3/runs/'+self.timestamp+'/')
-            with open('./code/network_related/slim_inception_v3/runs/'+self.timestamp+'/parameters', 'a+') as run_info:
-                params = locals()
-                print("Graph parameters:")
-                run_info.write("Graph parameters:\n")
-                for attr, value in params.items():
-                    if attr != 'self' and attr != 'run_info':
-                        print("{}={}".format(attr.upper(), value))
-                        run_info.write("{}={}\n".format(attr.upper(), value))
-                print("")
-                run_info.write("\n")
+        if not os.path.exists('./runs/'+self.timestamp+'/'):
+            os.makedirs('./runs/'+self.timestamp+'/')
+        with open('./runs/'+self.timestamp+'/run_info', 'a+') as run_info:
+            params = locals()
+            print("Graph parameters:")
+            run_info.write("Graph parameters:\n")
+            for attr, value in params.items():
+                if attr != 'self' and attr != 'run_info':
+                    print("{}={}".format(attr.upper(), value))
+                    run_info.write("{}={}\n".format(attr.upper(), value))
+            print("")
+            run_info.write("\n")
 
         # Define preprocessing
         with tf.name_scope('Preprocessing'):
@@ -130,6 +129,8 @@ class SlimInceptionV3(object):
 
     # Create and save vectors for set of images
     def create_image_space(self, path='./data/val2014/'):
+        print('Creating image space for data in {}'.format(path))
+
         # Create empty vector space
         new_vec_dict = {}
         # Fill vector space
@@ -141,14 +142,141 @@ class SlimInceptionV3(object):
                 temp_return = net.predict(image_batch)
                 for j in range(len(temp_return)):
                     new_vec_dict[filename_list[i + j]] = temp_return[j, :]
-                print(i + 1, end=' ')
+                print(i + 1, end=' ', flush=True)
             except KeyboardInterrupt:
                 break
 
         # Save image space
-        save_path = './data/image_space_' + self.timestamp + '.npy'
+        save_path = './runs/' + self.timestamp + '/image_space_' + self.timestamp + '.npy'
         np.save(save_path, new_vec_dict)
         print('\n\nImage space saved to {}'.format(save_path))
+
+    def evaluate(self, k=5):
+        print('Evaluating model on data in {}'.format('./data/sun/'))
+
+        def ap_func(distances, target_args):
+            """
+            Help function to calculate average precision of distances given the target
+            arguments.
+            Args:
+                distances: Vector with distances to a query vector, the distance to the
+                    query vector is included.
+                target_args: Vector with target arguments.
+            Returns:
+                ap_score: Average precision.
+            """
+            arg_sorted = distances.argsort()
+            if len(target_args) > 1:
+                if (target_args[1] - target_args[0]) > 1:
+                    mask = arg_sorted != (target_args[0] + 1)
+                    arg_sorted = arg_sorted[mask]
+                else:
+                    mask = arg_sorted != (target_args[0] - 1)
+                    arg_sorted = arg_sorted[mask]
+            target_function = np.vectorize(lambda x: x in target_args)
+            hit = target_function(arg_sorted)
+            cum_hit = np.cumsum(hit)
+            uni_hit, uni_idx = np.unique(cum_hit, return_index=True)
+            if uni_hit[0] == 0:
+                uni_idx = uni_idx[1:]
+            precision = np.array(range(1, (len(target_args) + 1))) / (uni_idx + 1)
+            ap_score = precision.sum() / len(target_args)
+            if ap_score > 0.3:
+                print(ap_score)
+                print(uni_idx)
+            return ap_score
+
+        """
+        Takes in a model and a path to evaluation data arranged in groups of
+        directories. The first 2 images in each directory will serve as queries
+        and the name of the directory will serve as explanatory word for
+        similarity.
+        Args:
+            model: Model to be evaluated, class created by the script in
+                'code/network_related/slim_inception_v3/slim_inception_v3/.py'
+            path_to_eval: String which defines the path to the directory containing
+                the evaluation data.
+        Returns:
+            map_score: Mean average precision score for image retrieval.
+        """
+
+        # Load
+        group_vecs = np.load('./data/new_scene_names.npy').item()
+        # Build matrix of the vectors produced by the model for each image in the
+        # evaluation dataset.
+        list_directories = os.listdir('./data/sun/')
+        if list_directories[0] == '.DS_Store':
+            list_directories = list_directories[1:]
+        nr_groups = len(list_directories)
+        image_matrix = np.zeros([300, 20 * nr_groups])
+        dic_keys = {j: i for i, j in enumerate(list(group_vecs.keys()))}
+
+        word_matrix = np.zeros([300, nr_groups])
+        word_list = []
+        for i, j in enumerate(list(group_vecs.values())):
+            word_matrix[:, i] = j[0][1]
+            word_list.append(j[0][0])
+
+        for i, explanatory_word in enumerate(list_directories):
+            list_images = os.listdir('./data/sun/' + explanatory_word + '/')
+            list_images = [
+                './data/sun/' + explanatory_word + '/' + image
+                for image in list_images if image != '.DS_Store'
+                ]
+            predictions = self.predict(list_images)
+            image_matrix[:, (20 * i):(20 * (i + 1))] = predictions.transpose()
+
+        # Calculate MAP with the 2 first in each category as query.
+        image_map = 0.0
+        for i in range(nr_groups):
+            target = list(range(20 * i, 20 * (i + 1)))
+            del target[0]
+            print(list_directories[i])
+            # Query 1
+            query_vec = image_matrix[:, (20 * i)]
+            dists = np.apply_along_axis(
+                cosine, 0, image_matrix, query_vec
+            )
+            ap_1 = ap_func(dists, target)
+            # Query 2
+            target = list(range(20 * i, 20 * (i + 1)))
+            del target[1]
+            query_vec = image_matrix[:, (20 * i + 1)]
+            dists = np.apply_along_axis(
+                cosine, 0, image_matrix, query_vec
+            )
+            ap_2 = ap_func(dists, target)
+            image_map += (ap_1 + ap_2)
+        image_map /= (2.0 * nr_groups)
+
+        # Split each group in subsets of k images, and find nearest explanatory
+        # word to the mean vector of the k images.
+        sum_k_rows = np.array(
+            [
+                image_matrix[:, (k * n):(k * n + k)].sum(1)
+                for n in range(int(image_matrix.shape[1] / k))
+                ]
+        )
+        word_map = 0.0
+        for i in range(sum_k_rows.shape[0]):
+            target_name = list_directories[int((i * k) / 20)]
+            target = [dic_keys[target_name]]
+            query_vec = sum_k_rows[i, :]
+            dists = np.apply_along_axis(
+                cosine, 0, word_matrix, query_vec
+            )
+            ap = ap_func(dists, target)
+            word_map += ap
+        word_map /= float(sum_k_rows.shape[0])
+
+        # Write results to file
+        with open('./runs/' + self.timestamp + '/run_info', 'a+') as run_info:
+            print('Mean Average Precision:')
+            run_info.write('Mean Average Precision:\n')
+            print('IMAGE_RETRIEVAL={}'.format(image_map))
+            run_info.write('IMAGE_RETRIEVAL={}\n'.format(image_map))
+            print('SIMILARITY_MOTIVATION={}'.format(word_map))
+            run_info.write('SIMILARITY_MOTIVATION={}\n\n'.format(word_map))
 
     # Get vector embeddings after training
     def predict(self, path_list):
@@ -166,18 +294,18 @@ class SlimInceptionV3(object):
             if np.ndim(temp_im) == 2:
                 temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
             # Resize image
-            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im], phase: False})
+            resized_temp_im = self.sess.run(normalized_im, feed_dict={input_im: [temp_im], phase: False})
             image_batch.append(resized_temp_im[0])
 
         # Get prediction
-        batch_pred = self.sess.run(y_pred, {normalized_im: image_batch, phase: False})
+        batch_pred = self.sess.run(y_pred, feed_dict={normalized_im: image_batch, phase: False})
         return batch_pred
 
     # Restore model from meta file and checkpoint
     def restore_model(self, timestamp):
         self.graph.as_default()
         self.timestamp = timestamp
-        checkpoint_dir = './code/network_related/slim_inception_v3/runs/'+timestamp+'/checkpoint/'
+        checkpoint_dir = './runs/'+timestamp+'/checkpoint/'
         new_saver = tf.train.import_meta_graph(checkpoint_dir+'model.meta')
         new_saver.restore(self.sess, tf.train.latest_checkpoint(checkpoint_dir))
         tf.constant(timestamp, name='restored_model')
@@ -185,15 +313,12 @@ class SlimInceptionV3(object):
 
     # Save graph layout separately
     def save_graph_layout(self):
-        tf.summary.FileWriter('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/graph/',
-                              graph=self.graph)
-        print('Graph layout saved to {}'.format('./code/network_related/slim_inception_v3/runs/'
-                                                + self.timestamp + '/graph/'))
+        tf.summary.FileWriter('./runs/' + self.timestamp + '/graph/', graph=self.graph)
+        print('Graph layout saved to {}'.format('.runs/' + self.timestamp + '/graph/'))
 
     # Save model to meta file and checkpoint
     def save_model(self):
-        save_path = self.saver.save(self.sess, './code/network_related/slim_inception_v3/runs/' + self.timestamp
-                                    + '/checkpoint/model')
+        save_path = self.saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
         print('Trained model saved to {}'.format(save_path))
 
     # Train model
@@ -202,8 +327,7 @@ class SlimInceptionV3(object):
 
         # Write hyperparameters to file
         with self.graph.device('/cpu:0'):
-            with open('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/parameters',
-                      'a+') as run_info:
+            with open('./runs/' + self.timestamp + '/run_info', 'a+') as run_info:
                 params = locals()
                 print("Train parameters:")
                 run_info.write("Train parameters:\n")
@@ -243,14 +367,12 @@ class SlimInceptionV3(object):
         all_summaries = tf.summary.merge_all()
 
         # Initialize writers
-        train_writer = tf.summary.FileWriter(
-            './code/network_related/slim_inception_v3/runs/' + self.timestamp + '/sums/train/', flush_secs=20)
-        val_writer = tf.summary.FileWriter(
-            './code/network_related/slim_inception_v3/runs/' + self.timestamp + '/sums/val/', flush_secs=20)
+        train_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/train/', flush_secs=20)
+        val_writer = tf.summary.FileWriter('./runs/' + self.timestamp + '/sums/val/', flush_secs=20)
 
         # Initialize saver
         try:
-            os.mkdir('./code/network_related/slim_inception_v3/runs/' + self.timestamp + '/checkpoint/')
+            os.mkdir('./runs/' + self.timestamp + '/checkpoint/')
         except FileExistsError:
             pass
         self.saver = tf.train.Saver(max_to_keep=1)
@@ -263,9 +385,7 @@ class SlimInceptionV3(object):
                     # Shuffle training samples for each epoch
                     random.shuffle(train_image_list)
                     # Save checkpoint every epoch
-                    save_path = self.saver.save(self.sess,
-                                                './code/network_related/slim_inception_v3/runs/'
-                                                + self.timestamp + '/checkpoint/model')
+                    save_path = self.saver.save(self.sess, './runs/' + self.timestamp + '/checkpoint/model')
                     print('Trained model saved to {}'.format(save_path))
 
                 # Perform minibatch training
@@ -280,7 +400,7 @@ class SlimInceptionV3(object):
                             if np.ndim(temp_im) == 2:
                                 temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
                             # Resize image
-                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
+                            resized_temp_im = self.sess.run(normalized_im, feed_dict={input_im: [temp_im]})
                             image_batch.append(resized_temp_im[0])
 
                             # Choose one of the five captions randomly
@@ -312,7 +432,7 @@ class SlimInceptionV3(object):
                             if np.ndim(temp_im) == 2:
                                 temp_im = np.stack([temp_im, temp_im, temp_im], axis=2)
                             # Resize image
-                            resized_temp_im = self.sess.run(normalized_im, {input_im: [temp_im]})
+                            resized_temp_im = self.sess.run(normalized_im, feed_dict={input_im: [temp_im]})
                             val_image_batch.append(resized_temp_im[0])
 
                             # Use first caption in validation set
@@ -321,15 +441,17 @@ class SlimInceptionV3(object):
                                 val_caption_batch.append(temp_caption / np.linalg.norm(temp_caption))
                             else:
                                 val_caption_batch.append(temp_caption)
-
                         val_caption_batch = np.stack(val_caption_batch, axis=0)
                         val_image_batch = np.stack(val_image_batch, axis=0)
+
+                        # Write summary
                         summaries = self.sess.run(all_summaries,
                                                   feed_dict={normalized_im: val_image_batch,
                                                              y: val_caption_batch,
                                                              phase: False})
                         val_writer.add_summary(summaries, e * len(train_image_list) + i)
                         print(i, end=' ', flush=True)
+
                 print('')
 
             # Makes it possible to interrupt training in the middle
@@ -340,35 +462,20 @@ class SlimInceptionV3(object):
 
 if __name__ == "__main__":
 
-    # Define the 36 models
-    branch_path = ['InceptionV3/InceptionV3/Mixed_7b/concat:0',
-                   'InceptionV3/InceptionV3/Mixed_6d/concat:0',
-                   'InceptionV3/InceptionV3/Mixed_6a/concat:0']
-    layers_to_train = [[['all'],
-                        ['Mixed_7b', 'Mixed_7a', 'Mixed_6e'],
-                        []],
-                       [['all'],
-                        ['Mixed_6d', 'Mixed_6c', 'Mixed_6b'],
-                        []],
-                       [['all'],
-                        ['Mixed_6a', 'Mixed_5d', 'Mixed_5c'],
-                        []]]
-    own_layers = [1, 3]
-    alpha = [0, 0.95]
+    # Define model
+    branch_path = 'InceptionV3/InceptionV3/Mixed_7b/concat:0'
+    layers_to_train = ['Mixed_7b', 'Mixed_7a', 'Mixed_6e']
+    own_layers = 1
+    alpha = 0.95
 
-    # Loop through models externally and stop at the right one
-    count = 1
-    for i, b in enumerate(branch_path):
-        for l in layers_to_train[i]:
-            for o in own_layers:
-                for a in alpha:
-                    if str(count) == sys.argv[1]:
-                        net = SlimInceptionV3()
-                        net.build_graph(branch_path=b, layers_to_train=l, own_layers=o,
-                                        init_learning_rate=1e-3, lr_decay_freq=1, lr_decay_factor=1,
-                                        epsilon=0.01, alpha=a, activation='tanh')
-                        net.save_graph_layout()
-                        net.train(batch_size=32, epochs=range(0, 15), val_freq=1000, val_size=200, norm_cap=False)
-                        net.save_model()
-                        sys.exit(0)
-                    count += 1
+    # Build, train, save, and create image space
+    net = SlimInceptionV3()
+    net.build_graph(branch_path=branch_path, layers_to_train=layers_to_train, own_layers=own_layers,
+                    init_learning_rate=1e-3, lr_decay_freq=1, lr_decay_factor=1,
+                    epsilon=0.01, alpha=alpha, activation='tanh')
+    net.save_graph_layout()
+    net.train(batch_size=32, epochs=range(0, 15), val_freq=1000, val_size=200, norm_cap=False)
+    net.save_model()
+    net.evaluate()
+    net.create_image_space()
+    sys.exit(0)
