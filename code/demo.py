@@ -10,6 +10,7 @@ from AppKit import NSScreen
 class Demo(object):
 
     def __init__(self,
+                 data_path='./data/val2014/',
                  timestamp='20170415-1810',
                  whole_w2v=False,
                  compact_window=False):
@@ -26,6 +27,7 @@ class Demo(object):
         self.root.wm_geometry("%dx%d%+d%+d" % (self.width, self.height, 0, 0))
 
         # Read data
+        self.data_path = data_path
         self.image_space = np.load('./runs/'+timestamp+'/image_space_'+timestamp+'.npy').item()
         self.w2v_model = KeyedVectors.load_word2vec_format('./data/GoogleNews-vectors-negative300.bin', binary=True)
         self.limited_words = np.load('./data/explanatory_dic.npy').item()
@@ -64,7 +66,7 @@ class Demo(object):
         self.labels.append(button)
 
         # Read query image
-        image = Image.open('./data/val2014/' + query_file_name)
+        image = Image.open(self.data_path + query_file_name)
 
         # Resize to query_size x query_size
         query_size = int(0.6 * self.height)
@@ -96,7 +98,7 @@ class Demo(object):
         # Load images
         self.images = []
         for i, file_name in enumerate(retrieved_file_names):
-            image = Image.open('./data/val2014/' + file_name)
+            image = Image.open(self.data_path + file_name)
 
             # Resize retrieved image
             [image_width, image_height] = image.size
@@ -158,7 +160,7 @@ class Demo(object):
         # Load images
         self.images = []
         for i, file_name in enumerate([query_file_name] + retrieved_file_names[:4]):
-            image = Image.open('./data/val2014/' + file_name)
+            image = Image.open(self.data_path + file_name)
 
             # Resize retrieved image
             [image_width, image_height] = image.size
@@ -261,5 +263,5 @@ class Demo(object):
         return top_word
 
 if __name__ == "__main__":
-    d = Demo('20170415-1810', whole_w2v=False, compact_window=False)
+    d = Demo(data_path='./data/val2014/', timestamp='20170415-1810', whole_w2v=False, compact_window=False)
     d.root.mainloop()
